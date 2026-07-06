@@ -58,7 +58,7 @@ private:
             setUsingNativeTitleBar (true);
             setContentOwned (new play::MainComponent (engine, scanner), true);
             setResizable (true, false);
-            setResizeLimits (440, 520, 10000, 10000);
+            setResizeLimits (560, 520, 10000, 10000);
             centreWithSize (getWidth(), getHeight());
             setVisible (true);
         }

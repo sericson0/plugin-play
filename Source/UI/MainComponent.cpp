@@ -53,9 +53,11 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
 {
     settingsButton.onClick = [this] { showAudioSettings(); };
     scanButton.onClick     = [this] { scanner.startScan(); updateScanButton(); };
+    cableButton.onClick    = [this] { CableSetupComponent::launch (engine.deviceManager); };
 
     addAndMakeVisible (settingsButton);
     addAndMakeVisible (scanButton);
+    addAndMakeVisible (cableButton);
     addAndMakeVisible (inputMeter);
     addAndMakeVisible (outputMeter);
 
@@ -80,7 +82,7 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
     };
 
     startTimerHz (30);
-    setSize (560, 700);
+    setSize (640, 700);
     updateStatusText();
 }
 
@@ -116,9 +118,11 @@ void MainComponent::resized()
     auto area = getLocalBounds();
 
     auto header = area.removeFromTop (56).reduced (12, 13);
-    scanButton.setBounds (header.removeFromRight (120));
+    scanButton.setBounds (header.removeFromRight (116));
     header.removeFromRight (8);
-    settingsButton.setBounds (header.removeFromRight (140));
+    settingsButton.setBounds (header.removeFromRight (130));
+    header.removeFromRight (8);
+    cableButton.setBounds (header.removeFromRight (124));
 
     auto meterRow = area.removeFromTop (40).reduced (16, 6);
     auto half = meterRow.getWidth() / 2;

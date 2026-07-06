@@ -29,6 +29,7 @@ target_sources(PluginPlay
         Source/Theme.cpp
         Source/Audio/AudioEngine.cpp
         Source/Plugins/PluginScanner.cpp
+        Source/Setup/VirtualCable.cpp
         Source/UI/MainComponent.cpp
         Source/UI/ChainView.cpp
 )

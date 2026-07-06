@@ -3,6 +3,7 @@
 #include <JuceHeader.h>
 #include "../Audio/AudioEngine.h"
 #include "../Plugins/PluginScanner.h"
+#include "../Setup/VirtualCable.h"
 #include "../Theme.h"
 #include "ChainView.h"
 #include "PluginWindow.h"
@@ -55,6 +56,7 @@ private:
 
     juce::TextButton settingsButton { "AUDIO SETTINGS" };
     juce::TextButton scanButton     { "SCAN PLUGINS" };
+    juce::TextButton cableButton    { "VIRTUAL CABLE" };
     LevelMeter inputMeter  { "IN" };
     LevelMeter outputMeter { "OUT" };
 
