@@ -26,7 +26,8 @@ struct PluginSlotInfo
     Broadcasts a change message whenever the chain or devices change.
 */
 class AudioEngine : public juce::ChangeBroadcaster,
-                    private juce::ChangeListener
+                    private juce::ChangeListener,
+                    private juce::Timer
 {
 public:
     AudioEngine();
@@ -45,6 +46,18 @@ public:
     void removePlugin (int index);
     void movePlugin (int fromIndex, int toIndex);
     void setBypassed (int index, bool shouldBeBypassed);
+    void clearChain();
+
+    /** Kill switch: bypasses every plugin at once without touching the
+        per-slot bypass flags, so disengaging restores the previous state. */
+    void setMasterBypass (bool shouldBypass);
+    bool isMasterBypassed() const noexcept          { return masterBypassed; }
+
+    //==============================================================================
+    /** Named chain presets, stored as XML files in the presets directory. */
+    juce::File getPresetsDirectory() const;
+    bool savePreset (const juce::File& presetFile);
+    bool loadPreset (const juce::File& presetFile);
 
     /** Called just before a plugin node is destroyed, so the UI can close its window. */
     std::function<void (juce::AudioProcessorGraph::NodeID)> onPluginAboutToBeRemoved;
@@ -81,6 +94,13 @@ private:
     };
 
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
+    void timerCallback() override;
+
+    /** Coalesces bursts of chain edits into one save, then keeps autosaving
+        periodically so plugin parameter tweaks survive a crash. */
+    void scheduleSave();
+
+    std::unique_ptr<juce::XmlElement> createChainXml() const;
 
     void rebuildConnections();
     void connectNodes (juce::AudioProcessorGraph::NodeID source, juce::AudioProcessorGraph::NodeID dest);
@@ -101,6 +121,7 @@ private:
     std::atomic<float> outputPeaks[2] { 0.0f, 0.0f };
 
     bool restoringSession = false;
+    bool masterBypassed = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioEngine)
 };

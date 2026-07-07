@@ -12,7 +12,8 @@ namespace play
 {
 
 //==============================================================================
-/** Stereo peak meter bar (two thin horizontal bars, colour-coded by level). */
+/** Stereo peak meter bar (two thin horizontal bars, colour-coded by level)
+    with peak-hold ticks and a latching clip light (click the meter to reset). */
 class LevelMeter : public juce::Component
 {
 public:
@@ -22,10 +23,14 @@ public:
     void pushLevels (float left, float right);
 
     void paint (juce::Graphics&) override;
+    void mouseDown (const juce::MouseEvent&) override;
 
 private:
     juce::String label;
-    float display[2] { 0.0f, 0.0f };
+    float display[2]  { 0.0f, 0.0f };
+    float peakHold[2] { 0.0f, 0.0f };
+    int   holdFrames[2] { 0, 0 };
+    bool  clipped = false;
 };
 
 //==============================================================================
@@ -46,10 +51,21 @@ private:
 
     void showAddPluginMenu (juce::Point<int> screenPosition);
     void showAudioSettings();
+    void showPresetsMenu();
+    void promptSavePreset();
+    void updateKillButton();
     void openPluginEditor (int slotIndex);
     void closePluginWindow (juce::AudioProcessorGraph::NodeID);
     void updateStatusText();
     void updateScanButton();
+
+    // Inline input/output/sample-rate selection (the "device bar" below the meters).
+    void buildDeviceSelectors();
+    void refreshSampleRates();
+    void applyDeviceSelection();
+    void applySampleRate (double rate);
+    double recommendedSampleRate() const;
+    void checkSampleRate();
 
     AudioEngine& engine;
     PluginScanner& scanner;
@@ -57,8 +73,27 @@ private:
     juce::TextButton settingsButton { "AUDIO SETTINGS" };
     juce::TextButton scanButton     { "SCAN PLUGINS" };
     juce::TextButton cableButton    { "VIRTUAL CABLE" };
+    juce::TextButton presetsButton  { "PRESETS" };
+    juce::TextButton killButton     { "FX ON" };
     LevelMeter inputMeter  { "IN" };
     LevelMeter outputMeter { "OUT" };
+
+    juce::Label      inputLabel  { {}, "INPUT" };
+    juce::Label      outputLabel { {}, "OUTPUT" };
+    juce::Label      rateLabel   { {}, "RATE" };
+    juce::ComboBox   inputSelector;
+    juce::ComboBox   outputSelector;
+    juce::ComboBox   sampleRateSelector;
+    juce::Label      rateHint;
+    juce::Rectangle<int> deviceBarBounds;
+    bool updatingSelectors = false;
+    bool autoRate = true;                 // match the source's rate automatically
+    double lastAutoAppliedRate = 0.0;
+
+    // "Auto — match source" lives as the first item in the rate dropdown. Sample
+    // rates in Hz are always well above this, so the id can't collide with one.
+    static constexpr int autoRateItemId = 1;
+    std::unique_ptr<juce::PropertiesFile> uiPrefs;
 
     juce::Viewport viewport;
     ChainView chainView { engine };

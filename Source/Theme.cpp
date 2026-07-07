@@ -1,9 +1,33 @@
 #include "Theme.h"
 
+#if JUCE_WINDOWS
+ #ifndef NOMINMAX
+  #define NOMINMAX
+ #endif
+ #include <windows.h>
+ #include <dwmapi.h>
+ #pragma comment (lib, "dwmapi.lib")
+#endif
+
 namespace play
 {
 
 using namespace play::Colours;
+
+void applyDarkTitleBar (juce::Component& window)
+{
+#if JUCE_WINDOWS
+    if (auto* peer = window.getPeer())
+    {
+        const BOOL useDarkMode = TRUE;
+        DwmSetWindowAttribute ((HWND) peer->getNativeHandle(),
+                               20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */,
+                               &useDarkMode, sizeof (useDarkMode));
+    }
+#else
+    juce::ignoreUnused (window);
+#endif
+}
 
 PlayLookAndFeel::PlayLookAndFeel()
 {

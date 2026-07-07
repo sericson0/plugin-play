@@ -30,6 +30,10 @@ namespace play::Colours
 namespace play
 {
 
+/** Asks DWM to draw the native title bar dark so it matches the theme.
+    Call after the window is visible (its peer must exist). No-op off Windows. */
+void applyDarkTitleBar (juce::Component& window);
+
 class PlayLookAndFeel : public juce::LookAndFeel_V4
 {
 public:

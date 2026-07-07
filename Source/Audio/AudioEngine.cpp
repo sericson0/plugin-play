@@ -6,6 +6,11 @@ namespace play
 using Graph  = juce::AudioProcessorGraph;
 using IONode = juce::AudioProcessorGraph::AudioGraphIOProcessor;
 
+// Chain edits save after a short debounce; the long interval keeps autosaving
+// so plugin parameter tweaks (which broadcast nothing) survive a crash.
+static constexpr int saveDebounceMs     = 1000;
+static constexpr int autosaveIntervalMs = 30000;
+
 //==============================================================================
 void AudioEngine::MeterTap::audioDeviceIOCallbackWithContext (const float* const* inputChannelData, int numInputChannels,
                                                               float* const* outputChannelData, int numOutputChannels,
@@ -46,10 +51,13 @@ AudioEngine::AudioEngine()
     player.setProcessor (&graph);
     deviceManager.addAudioCallback (&meterTap);
     deviceManager.addChangeListener (this);
+
+    startTimer (autosaveIntervalMs);
 }
 
 AudioEngine::~AudioEngine()
 {
+    stopTimer();
     saveSession();
 
     deviceManager.removeChangeListener (this);
@@ -82,10 +90,11 @@ void AudioEngine::addPlugin (const juce::PluginDescription& description,
 
             instance->enableAllBuses();
             auto node = graph.addNode (std::move (instance));
+            node->setBypassed (masterBypassed);
             slots.push_back ({ node->nodeID, description, false });
 
             rebuildConnections();
-            saveSession();
+            scheduleSave();
             sendChangeMessage();
 
             if (onDone != nullptr)
@@ -107,8 +116,14 @@ void AudioEngine::removePlugin (int index)
     graph.removeNode (nodeID);
 
     rebuildConnections();
-    saveSession();
+    scheduleSave();
     sendChangeMessage();
+}
+
+void AudioEngine::clearChain()
+{
+    while (! slots.empty())
+        removePlugin ((int) slots.size() - 1);
 }
 
 void AudioEngine::movePlugin (int fromIndex, int toIndex)
@@ -123,7 +138,7 @@ void AudioEngine::movePlugin (int fromIndex, int toIndex)
     slots.insert (slots.begin() + toIndex, slot);
 
     rebuildConnections();
-    saveSession();
+    scheduleSave();
     sendChangeMessage();
 }
 
@@ -135,9 +150,23 @@ void AudioEngine::setBypassed (int index, bool shouldBeBypassed)
     slots[(size_t) index].bypassed = shouldBeBypassed;
 
     if (auto* node = graph.getNodeForId (slots[(size_t) index].nodeID))
-        node->setBypassed (shouldBeBypassed);
+        node->setBypassed (masterBypassed || shouldBeBypassed);
 
-    saveSession();
+    scheduleSave();
+    sendChangeMessage();
+}
+
+void AudioEngine::setMasterBypass (bool shouldBypass)
+{
+    if (masterBypassed == shouldBypass)
+        return;
+
+    masterBypassed = shouldBypass;
+
+    for (auto& slot : slots)
+        if (auto* node = graph.getNodeForId (slot.nodeID))
+            node->setBypassed (masterBypassed || slot.bypassed);
+
     sendChangeMessage();
 }
 
@@ -147,8 +176,19 @@ void AudioEngine::changeListenerCallback (juce::ChangeBroadcaster*)
     // Device changed: channel counts of the graph's IO nodes may have changed,
     // so re-add the connections, and persist the new device setup.
     rebuildConnections();
-    saveSession();
+    scheduleSave();
     sendChangeMessage();
+}
+
+void AudioEngine::scheduleSave()
+{
+    startTimer (saveDebounceMs);
+}
+
+void AudioEngine::timerCallback()
+{
+    saveSession();
+    startTimer (autosaveIntervalMs);
 }
 
 void AudioEngine::connectNodes (Graph::NodeID source, Graph::NodeID dest)
@@ -211,18 +251,9 @@ juce::File AudioEngine::getSessionFile() const
 }
 
 //==============================================================================
-void AudioEngine::saveSession()
+std::unique_ptr<juce::XmlElement> AudioEngine::createChainXml() const
 {
-    if (restoringSession)
-        return;
-
-    juce::XmlElement session ("SESSION");
-
-    auto* devices = session.createNewChildElement ("DEVICES");
-    if (auto deviceState = deviceManager.createStateXml())
-        devices->addChildElement (deviceState.release());
-
-    auto* chain = session.createNewChildElement ("CHAIN");
+    auto chain = std::make_unique<juce::XmlElement> ("CHAIN");
 
     for (size_t i = 0; i < slots.size(); ++i)
     {
@@ -240,9 +271,55 @@ void AudioEngine::saveSession()
         }
     }
 
+    return chain;
+}
+
+void AudioEngine::saveSession()
+{
+    if (restoringSession)
+        return;
+
+    juce::XmlElement session ("SESSION");
+
+    auto* devices = session.createNewChildElement ("DEVICES");
+    if (auto deviceState = deviceManager.createStateXml())
+        devices->addChildElement (deviceState.release());
+
+    session.addChildElement (createChainXml().release());
+
     auto file = getSessionFile();
     file.getParentDirectory().createDirectory();
     session.writeTo (file);
+}
+
+//==============================================================================
+juce::File AudioEngine::getPresetsDirectory() const
+{
+    return getSessionFile().getParentDirectory().getChildFile ("Presets");
+}
+
+bool AudioEngine::savePreset (const juce::File& presetFile)
+{
+    presetFile.getParentDirectory().createDirectory();
+    return createChainXml()->writeTo (presetFile);
+}
+
+bool AudioEngine::loadPreset (const juce::File& presetFile)
+{
+    auto xml = juce::XmlDocument::parse (presetFile);
+
+    if (xml == nullptr || ! xml->hasTagName ("CHAIN"))
+        return false;
+
+    clearChain();
+
+    if (xml->getNumChildElements() > 0)
+    {
+        restoringSession = true;
+        restoreChainFromXml (std::shared_ptr<juce::XmlElement> (xml.release()), 0);
+    }
+
+    return true;
 }
 
 void AudioEngine::loadSession()
@@ -315,7 +392,7 @@ void AudioEngine::restoreChainFromXml (std::shared_ptr<juce::XmlElement> chainXm
                     instance->setStateInformation (state.getData(), (int) state.getSize());
 
                 auto node = graph.addNode (std::move (instance));
-                node->setBypassed (bypassed);
+                node->setBypassed (masterBypassed || bypassed);
                 slots.push_back ({ node->nodeID, description, bypassed });
 
                 rebuildConnections();

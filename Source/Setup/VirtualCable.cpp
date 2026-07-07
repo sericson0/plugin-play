@@ -94,7 +94,9 @@ void CableSetupComponent::launch (juce::AudioDeviceManager& deviceManager)
     options.escapeKeyTriggersCloseButton = true;
     options.useNativeTitleBar = true;
     options.resizable = false;
-    options.launchAsync();
+
+    if (auto* window = options.launchAsync())
+        applyDarkTitleBar (*window);
 }
 
 //==============================================================================

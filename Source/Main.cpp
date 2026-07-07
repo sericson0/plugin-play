@@ -58,9 +58,10 @@ private:
             setUsingNativeTitleBar (true);
             setContentOwned (new play::MainComponent (engine, scanner), true);
             setResizable (true, false);
-            setResizeLimits (560, 520, 10000, 10000);
+            setResizeLimits (700, 560, 10000, 10000);
             centreWithSize (getWidth(), getHeight());
             setVisible (true);
+            play::applyDarkTitleBar (*this);
         }
 
         void closeButtonPressed() override

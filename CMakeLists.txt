@@ -19,19 +19,27 @@ juce_add_gui_app(PluginPlay
     PRODUCT_NAME  "Plugin Play"
     COMPANY_NAME  "Plugin Play"
     BUNDLE_ID     "com.pluginplay.app"
+    ICON_BIG      "${CMAKE_SOURCE_DIR}/Resources/exe_logo.png"
 )
 
 juce_generate_juce_header(PluginPlay)
+
+# ── Embedded resources (logo shown in the header) ────────────────────────────
+juce_add_binary_data(PluginPlayData
+    SOURCES
+        Resources/exe_logo.png)
 
 target_sources(PluginPlay
     PRIVATE
         Source/Main.cpp
         Source/Theme.cpp
         Source/Audio/AudioEngine.cpp
+        Source/Audio/WasapiEndpoints.cpp
         Source/Plugins/PluginScanner.cpp
         Source/Setup/VirtualCable.cpp
         Source/UI/MainComponent.cpp
         Source/UI/ChainView.cpp
+        Source/UI/PluginPicker.cpp
 )
 
 # JUCE 8 ships its own ASIO interop header, so JUCE_ASIO needs no Steinberg SDK.
@@ -49,6 +57,7 @@ target_compile_definitions(PluginPlay
 
 target_link_libraries(PluginPlay
     PRIVATE
+        PluginPlayData
         juce::juce_audio_utils
         juce::juce_audio_processors
     PUBLIC

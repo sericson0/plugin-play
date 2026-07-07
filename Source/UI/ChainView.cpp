@@ -13,11 +13,7 @@ public:
     SlotCard (ChainView& ownerView, int slotIndex)
         : owner (ownerView), index (slotIndex)
     {
-        const auto& slot = owner.engine.getSlot (index);
-
         bypassButton.setClickingTogglesState (false);
-        bypassButton.setToggleState (! slot.bypassed, juce::dontSendNotification);
-        bypassButton.setButtonText (slot.bypassed ? "OFF" : "ON");
         bypassButton.onClick = [this]
         {
             auto nowBypassed = ! owner.engine.getSlot (index).bypassed;
@@ -32,14 +28,25 @@ public:
 
         removeButton.onClick = [this] { owner.engine.removePlugin (index); };
 
-        if (slot.bypassed)
-            bypassButton.setColour (juce::TextButton::textColourOffId, inactive);
-
         addAndMakeVisible (bypassButton);
         addAndMakeVisible (editButton);
         addAndMakeVisible (removeButton);
 
         setMouseCursor (juce::MouseCursor::DraggingHandCursor);
+        update (slotIndex);
+    }
+
+    /** Re-binds this card to the slot at the given index and syncs its controls. */
+    void update (int newIndex)
+    {
+        index = newIndex;
+        const auto& slot = owner.engine.getSlot (index);
+
+        bypassButton.setToggleState (! slot.bypassed, juce::dontSendNotification);
+        bypassButton.setButtonText (slot.bypassed ? "OFF" : "ON");
+        bypassButton.setColour (juce::TextButton::textColourOffId,
+                                slot.bypassed ? inactive : textNormal);
+        repaint();
     }
 
     void paint (juce::Graphics& g) override
@@ -101,9 +108,36 @@ public:
         bypassButton.setBounds (strip.removeFromRight (44).withSizeKeepingCentre (44, 26));
     }
 
-    void mouseDown (const juce::MouseEvent&) override   { owner.cardDragStarted (this); dragging = true; repaint(); }
-    void mouseDrag (const juce::MouseEvent& e) override { owner.cardDragMoved (this, e.getDistanceFromDragStartY()); }
-    void mouseUp (const juce::MouseEvent&) override     { dragging = false; owner.cardDragEnded (this); }
+    // A drag only engages after a small movement threshold, so plain clicks
+    // and double-clicks don't flash the drag highlight or start a reorder.
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        if (! dragging && e.getDistanceFromDragStart() > 4)
+        {
+            dragging = true;
+            owner.cardDragStarted (this);
+            repaint();
+        }
+
+        if (dragging)
+            owner.cardDragMoved (this, e.getDistanceFromDragStartY());
+    }
+
+    void mouseUp (const juce::MouseEvent&) override
+    {
+        if (dragging)
+        {
+            dragging = false;
+            owner.cardDragEnded (this);
+            repaint();
+        }
+    }
+
+    void mouseDoubleClick (const juce::MouseEvent&) override
+    {
+        if (owner.onOpenEditor != nullptr)
+            owner.onOpenEditor (index);
+    }
 
     bool dragging = false;
 
@@ -140,13 +174,18 @@ void ChainView::refresh()
 {
     draggedCard = nullptr;
     dropTargetIndex = -1;
-    cards.clear();
 
-    for (int i = 0; i < engine.getNumPlugins(); ++i)
-        addAndMakeVisible (cards.add (new SlotCard (*this, i)));
+    while (cards.size() > engine.getNumPlugins())
+        cards.removeLast();
+
+    while (cards.size() < engine.getNumPlugins())
+        addAndMakeVisible (cards.add (new SlotCard (*this, cards.size())));
+
+    for (int i = 0; i < cards.size(); ++i)
+        cards[i]->update (i);
 
     setSize (getWidth(), getIdealHeight());
-    layoutCards (false);
+    layoutCards (true);
     repaint();
 }
 
@@ -160,10 +199,26 @@ void ChainView::resized()
     layoutCards (false);
 }
 
-void ChainView::layoutCards (bool)
+void ChainView::layoutCards (bool animate)
 {
     auto width = juce::jmax (0, getWidth());
     int y = cardGap;
+
+    auto place = [this, animate] (juce::Component* comp, juce::Rectangle<int> target)
+    {
+        // getComponentDestination returns the current bounds when not
+        // animating, so this also skips components already in place.
+        if (animate && ! comp->getBounds().isEmpty())
+        {
+            if (animator.getComponentDestination (comp) != target)
+                animator.animateComponent (comp, target, 1.0f, 140, false, 1.0, 0.0);
+        }
+        else
+        {
+            animator.cancelAnimation (comp, false);
+            comp->setBounds (target);
+        }
+    };
 
     for (int i = 0; i < cards.size(); ++i)
     {
@@ -183,9 +238,9 @@ void ChainView::layoutCards (bool)
                 ++visualIndex;
         }
 
-        cards[i]->setBounds (0, cardGap + visualIndex * (cardHeight + cardGap),
-                             width, cardHeight);
-        y = juce::jmax (y, cards[i]->getBottom() + cardGap);
+        place (cards[i], { 0, cardGap + visualIndex * (cardHeight + cardGap),
+                           width, cardHeight });
+        y = juce::jmax (y, cardGap + (visualIndex + 1) * (cardHeight + cardGap));
     }
 
     if (draggedCard != nullptr)
@@ -194,7 +249,7 @@ void ChainView::layoutCards (bool)
     if (cards.isEmpty())
         y = cardGap + 44;   // room for the empty-state hint
 
-    addButton.setBounds (0, y, width, cardHeight - 14);
+    place (&addButton, { 0, y, width, cardHeight - 14 });
 }
 
 void ChainView::paint (juce::Graphics& g)
@@ -258,9 +313,17 @@ void ChainView::cardDragEnded (SlotCard* card)
     dropTargetIndex = -1;
 
     if (from != to && from >= 0)
+    {
+        // Match the card order to the new chain order first, so the change
+        // broadcast's refresh() re-binds cards in place and the dropped card
+        // animates from where it was released into its new slot.
+        cards.move (from, to);
         engine.movePlugin (from, to);   // triggers a change broadcast -> refresh()
+    }
     else
-        layoutCards (false);
+    {
+        layoutCards (true);
+    }
 
     repaint();
 }

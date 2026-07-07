@@ -36,6 +36,7 @@ public:
         centreAroundComponent (nullptr, getWidth(), getHeight());
         setVisible (true);
         toFront (true);
+        play::applyDarkTitleBar (*this);
     }
 
     void closeButtonPressed() override

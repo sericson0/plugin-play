@@ -17,7 +17,8 @@ public:
     explicit ChainView (AudioEngine&);
     ~ChainView() override;
 
-    /** Rebuilds the slot cards from the engine's current chain. */
+    /** Syncs the slot cards with the engine's current chain, reusing
+        existing cards so unrelated state (hover, focus) survives. */
     void refresh();
 
     /** Height needed to show all cards; the parent viewport uses this. */
@@ -46,6 +47,7 @@ private:
     AudioEngine& engine;
     juce::OwnedArray<SlotCard> cards;
     juce::TextButton addButton { "+  Add Plugin" };
+    juce::ComponentAnimator animator;
 
     SlotCard* draggedCard = nullptr;
     int draggedStartY = 0;
