@@ -8,6 +8,66 @@ namespace play
 
 using namespace play::Colours;
 
+namespace
+{
+//==============================================================================
+/** Content for the Help dialog: the Plugin Play logo as a banner above a
+    scrolling, read-only text panel. */
+class HelpContent : public juce::Component
+{
+public:
+    explicit HelpContent (const juce::String& helpText)
+    {
+        logo = juce::ImageCache::getFromMemory (BinaryData::full_logo_png,
+                                                BinaryData::full_logo_pngSize);
+
+        doc.setMultiLine (true);
+        doc.setReadOnly (true);
+        doc.setCaretVisible (false);
+        doc.setScrollbarsShown (true);
+        doc.setColour (juce::TextEditor::backgroundColourId, panelBackground);
+        doc.setColour (juce::TextEditor::outlineColourId, gridLine);
+        doc.setColour (juce::TextEditor::focusedOutlineColourId, gridLine);
+        doc.setColour (juce::TextEditor::textColourId, textNormal);
+        doc.setFont (juce::Font (juce::FontOptions (14.0f)));
+        doc.setText (helpText, false);
+        addAndMakeVisible (doc);
+
+        setSize (560, bannerHeight + 540);
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        g.fillAll (background);
+
+        // The logo art is on a black field, so keep the banner black too and let
+        // the image sit within it (scaled to fit, never upscaled past its size).
+        auto banner = getLocalBounds().removeFromTop (bannerHeight);
+        g.setColour (juce::Colours::black);
+        g.fillRect (banner);
+        g.setColour (gridLine);
+        g.fillRect (banner.getX(), banner.getBottom() - 1, banner.getWidth(), 1);
+
+        if (logo.isValid())
+            g.drawImageWithin (logo, banner.getX(), banner.getY(),
+                               banner.getWidth(), banner.getHeight(),
+                               juce::RectanglePlacement::centred, false);
+    }
+
+    void resized() override
+    {
+        auto area = getLocalBounds();
+        area.removeFromTop (bannerHeight);
+        doc.setBounds (area.reduced (2));
+    }
+
+private:
+    static constexpr int bannerHeight = 150;
+    juce::Image logo;
+    juce::TextEditor doc;
+};
+} // namespace
+
 //==============================================================================
 void LevelMeter::pushLevels (float left, float right)
 {
@@ -157,7 +217,7 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
     // toggled/coloured background reserved for the alert (limiter off) state.
     limiterButton.onClick   = [this] { engine.setLimiterEnabled (! engine.isLimiterEnabled()); updateLimiterButton(); };
     limiterButton.setColour (juce::TextButton::textColourOffId, accentBright);
-    limiterButton.setColour (juce::TextButton::buttonOnColourId, metricWarn.darker (0.5f));
+    limiterButton.setColour (juce::TextButton::buttonOnColourId, metricBad.darker (0.5f));
 
     // "Add Plugin" is the primary action but should read like the other toolbar
     // buttons rather than a filled orange call-to-action.
@@ -380,12 +440,6 @@ void MainComponent::paint (juce::Graphics& g)
     g.drawText ("PLUGIN", textX, 0, firstWidth, 56, juce::Justification::centredLeft);
     g.setColour (textBright);
     g.drawText ("PLAY", textX + firstWidth, 0, 90, 56, juce::Justification::centredLeft);
-
-    // Thin accent underline anchoring the brand row to the header band.
-    const int wordmarkEnd = textX + firstWidth
-                              + juce::GlyphArrangement::getStringWidthInt (wordmarkFont, "PLAY");
-    g.setColour (accent.withAlpha (0.7f));
-    g.fillRect (textX, 40, wordmarkEnd - textX, 2);
 
     // Device area panel behind the input/output/rate selectors.
     if (! deviceBarBounds.isEmpty())
@@ -651,18 +705,8 @@ void MainComponent::addScanFolder()
 
 void MainComponent::showHelp()
 {
-    auto doc = std::make_unique<juce::TextEditor>();
-    doc->setMultiLine (true);
-    doc->setReadOnly (true);
-    doc->setCaretVisible (false);
-    doc->setScrollbarsShown (true);
-    doc->setColour (juce::TextEditor::backgroundColourId, panelBackground);
-    doc->setColour (juce::TextEditor::outlineColourId, gridLine);
-    doc->setColour (juce::TextEditor::focusedOutlineColourId, gridLine);
-    doc->setColour (juce::TextEditor::textColourId, textNormal);
-    doc->setFont (juce::Font (juce::FontOptions (14.0f)));
-    doc->setText (
-        "PLUGIN PLAY — HELP\n"
+    auto content = std::make_unique<HelpContent> (
+        "PLUGIN PLAY - HELP\n"
         "\n"
         "Plugin Play hosts VST3 effects between your DJ software and your\n"
         "speakers, so you can add reverb, EQ, filters and more to the whole mix\n"
@@ -670,31 +714,31 @@ void MainComponent::showHelp()
         "\n"
         "GETTING STARTED\n"
         "\n"
-        "1.  VIRTUAL CABLE — click this to install and configure a virtual audio\n"
+        "1.  VIRTUAL CABLE - click this to install and configure a virtual audio\n"
         "    cable. Your DJ software outputs to the cable, and Plugin Play reads\n"
         "    the cable as its input.\n"
         "\n"
-        "2.  AUDIO SETTINGS — choose your INPUT (the cable) and OUTPUT (your\n"
+        "2.  AUDIO SETTINGS - choose your INPUT (the cable) and OUTPUT (your\n"
         "    speakers or interface). Expand the panel for the channel pairs, the\n"
         "    driver type, and the sample rate and buffer size. 'Auto' matches the\n"
         "    source rate to avoid an extra resample; a smaller buffer means lower\n"
         "    latency but less stability. TEST plays a tone through your output.\n"
         "\n"
-        "3.  SCAN PLUGINS — finds the VST3 effects installed on your system. Run\n"
+        "3.  SCAN PLUGINS - finds the VST3 effects installed on your system. Run\n"
         "    this once (and again after installing new plugins).\n"
         "\n"
         "BUILDING A CHAIN\n"
         "\n"
-        "  •  Add Plugin — appends an effect to the end of the chain. Audio flows\n"
+        "  -  Add Plugin - appends an effect to the end of the chain. Audio flows\n"
         "     top to bottom through the chain.\n"
-        "  •  Drag a card by its grip dots to reorder effects.\n"
-        "  •  ON / OFF — bypass a single effect.\n"
-        "  •  OPEN — open the plugin's own editor (or double-click the card).\n"
-        "  •  FLOAT — a toggle that pins an open editor on top of other windows so\n"
+        "  -  Drag a card by its grip dots to reorder effects.\n"
+        "  -  ON / OFF - bypass a single effect.\n"
+        "  -  OPEN - open the plugin's own editor (or double-click the card).\n"
+        "  -  FLOAT - a toggle that pins an open editor on top of other windows so\n"
         "     it stays visible over your DJ software. It does not open the editor.\n"
-        "  •  ×  — remove the effect from the chain. Press Ctrl+Z to undo a\n"
-        "     removal (the plugin comes back with its settings and position).\n"
-        "  •  FX ON / OFF (top of the meters) — master bypass for every effect,\n"
+        "  -  X (remove) - takes the effect out of the chain. Press Ctrl+Z to undo\n"
+        "     a removal (the plugin comes back with its settings and position).\n"
+        "  -  FX ON / OFF (top of the meters) - master bypass for every effect,\n"
         "     crossfaded so it won't click.\n"
         "\n"
         "LIMITER\n"
@@ -710,13 +754,11 @@ void MainComponent::showHelp()
         "\n"
         "PRESETS\n"
         "\n"
-        "  Save the current chain and reload it later from the PRESETS menu.\n",
-        false);
-    doc->setSize (560, 540);
+        "  Save the current chain and reload it later from the PRESETS menu.\n");
 
     juce::DialogWindow::LaunchOptions options;
-    options.content.setOwned (doc.release());
-    options.dialogTitle = "Plugin Play — Help";
+    options.content.setOwned (content.release());
+    options.dialogTitle = "Plugin Play - Help";
     options.dialogBackgroundColour = background;
     options.escapeKeyTriggersCloseButton = true;
     options.useNativeTitleBar = true;
@@ -1123,7 +1165,7 @@ void MainComponent::checkSampleRate()
 
     rateHint.setColour (juce::Label::textColourId, metricWarn);
     rateHint.setText ("Source is " + asKHz (source) + " but you're at " + asKHz (current)
-                          + " — audio is being resampled.",
+                          + " - audio is being resampled.",
                       juce::dontSendNotification);
 }
 
@@ -1243,10 +1285,11 @@ void MainComponent::updateLimiterButton()
     // Toggle on == the alert (limiter off) state, so the normal state keeps the
     // default gray background with orange text like the FX ON button.
     limiterButton.setToggleState (! on, juce::dontSendNotification);
-    limiterButton.setColour (juce::TextButton::textColourOffId, on ? accentBright : metricWarn);
+    limiterButton.setColour (juce::TextButton::textColourOffId, on ? accentBright : metricBad);
 
-    // The safety limiter being off is worth flagging, but less urgently than FX off.
-    limiterButton.setAlert (! on, metricWarn);
+    // The safety limiter being off is a safety-relevant state — flag it in the same
+    // red as FX OFF.
+    limiterButton.setAlert (! on, metricBad);
 }
 
 void MainComponent::updateStatusText()

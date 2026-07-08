@@ -100,7 +100,7 @@ private:
     juce::TextButton      closeButton   { "CLOSE" };
     juce::HyperlinkButton pageLink   { "Open download page instead",
                                        juce::URL (VirtualCable::downloadPage) };
-    juce::HyperlinkButton donateLink { "VB-CABLE is donationware — please support VB-Audio",
+    juce::HyperlinkButton donateLink { "VB-CABLE is donationware - please support VB-Audio",
                                        juce::URL (VirtualCable::donateUrl) };
 
     juce::String detectedCable;

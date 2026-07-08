@@ -27,7 +27,8 @@ juce_generate_juce_header(PluginPlay)
 # ── Embedded resources (logo shown in the header) ────────────────────────────
 juce_add_binary_data(PluginPlayData
     SOURCES
-        Resources/exe_logo_transparent.png)
+        Resources/exe_logo_transparent.png
+        Resources/full_logo.png)
 
 target_sources(PluginPlay
     PRIVATE

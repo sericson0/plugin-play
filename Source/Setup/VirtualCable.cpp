@@ -146,7 +146,7 @@ struct CableSetupComponent::InstallThread : public juce::Thread
 
     void run() override
     {
-        post ([] (auto& c) { c.showProgress ("Finding the latest version…"); });
+        post ([] (auto& c) { c.showProgress ("Finding the latest version..."); });
 
         const auto zipUrl = VirtualCable::resolveLatestZipUrl();
         if (threadShouldExit()) return;
@@ -156,7 +156,7 @@ struct CableSetupComponent::InstallThread : public juce::Thread
         workDir.deleteRecursively();
         workDir.createDirectory();
 
-        post ([] (auto& c) { c.showProgress ("Downloading VB-CABLE…"); });
+        post ([] (auto& c) { c.showProgress ("Downloading VB-CABLE..."); });
 
         const auto zipFile = workDir.getChildFile ("VBCABLE.zip");
         if (! VirtualCable::downloadTo (zipUrl, zipFile))
@@ -167,7 +167,7 @@ struct CableSetupComponent::InstallThread : public juce::Thread
         }
         if (threadShouldExit()) return;
 
-        post ([] (auto& c) { c.showProgress ("Extracting…"); });
+        post ([] (auto& c) { c.showProgress ("Extracting..."); });
 
         const auto extractDir = workDir.getChildFile ("extracted");
         extractDir.createDirectory();
@@ -201,7 +201,7 @@ struct CableSetupComponent::InstallThread : public juce::Thread
         if (threadShouldExit()) return;
 
         post ([] (auto& c) { c.showProgress (
-            "Starting the VB-CABLE installer — approve the Windows prompt…"); });
+            "Starting the VB-CABLE installer - approve the Windows prompt..."); });
 
         if (! VirtualCable::launchInstaller (installer))
         {
@@ -335,7 +335,7 @@ void CableSetupComponent::installLaunched()
         "3.  When it finishes, click \"Reboot now to finish\" below (or reboot yourself).\n"
         "4.  After the restart, reopen Plugin Play and click \"Re-check\".\n"
         "\n"
-        "VB-CABLE is donationware from VB-Audio — if you find it useful, please "
+        "VB-CABLE is donationware from VB-Audio - if you find it useful, please "
         "consider paying what you can using the link below.",
         juce::dontSendNotification);
 
@@ -349,7 +349,7 @@ void CableSetupComponent::confirmAndReboot()
         juce::MessageBoxIconType::WarningIcon,
         "Restart Windows?",
         "Windows needs to restart to finish installing VB-CABLE.\n\n"
-        "Save any work in your DJ software and other apps first — everything will "
+        "Save any work in your DJ software and other apps first - everything will "
         "close. Restart now?",
         "Restart now",
         "Not yet",
@@ -359,7 +359,7 @@ void CableSetupComponent::confirmAndReboot()
             {
                 if (result == 1 && safe != nullptr)
                     if (! VirtualCable::reboot())
-                        safe->statusLabel.setText ("Couldn't start the restart — please reboot manually.",
+                        safe->statusLabel.setText ("Couldn't start the restart - please reboot manually.",
                                                    juce::dontSendNotification);
             }));
 }

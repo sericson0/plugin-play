@@ -16,7 +16,7 @@ public:
                   const juce::String& title,
                   std::function<void()> onCloseRequest)
         : juce::DocumentWindow (title, play::Colours::background,
-                                juce::DocumentWindow::closeButton),
+                                juce::DocumentWindow::minimiseButton | juce::DocumentWindow::closeButton),
           onClose (std::move (onCloseRequest))
     {
         setUsingNativeTitleBar (true);
