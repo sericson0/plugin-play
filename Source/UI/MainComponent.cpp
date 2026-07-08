@@ -1,5 +1,6 @@
 #include "MainComponent.h"
 #include "PluginPicker.h"
+#include "InputSourcePicker.h"
 #include "../Audio/WasapiEndpoints.h"
 #include "BinaryData.h"
 
@@ -11,37 +12,75 @@ using namespace play::Colours;
 namespace
 {
 //==============================================================================
-/** Content for the Help dialog: the Plugin Play logo as a banner above a
-    scrolling, read-only text panel. */
+/** Content for the Help dialog: the Plugin Play logo as a banner, a row of
+    tab buttons, and a scrolling, read-only text panel whose contents change
+    with the selected tab. */
 class HelpContent : public juce::Component
 {
 public:
-    explicit HelpContent (const juce::String& helpText)
+    HelpContent()
     {
         logo = juce::ImageCache::getFromMemory (BinaryData::full_logo_png,
                                                 BinaryData::full_logo_pngSize);
+
+        // The source art sits on a wide black field with tall black margins above
+        // and below the artwork; trim most of that vertical black so the logo
+        // fills the banner instead of shrinking into a narrow strip.
+        if (logo.isValid())
+        {
+            const int y = juce::roundToInt (logo.getHeight() * 0.26f);
+            const int h = juce::roundToInt (logo.getHeight() * 0.50f);
+            logo = logo.getClippedImage ({ 0, y, logo.getWidth(), h });
+        }
+
+        const char* names[numTabs] = { "Overview", "Virtual Cable", "Audio Settings",
+                                       "Plugins", "Troubleshooting" };
+        for (int i = 0; i < numTabs; ++i)
+        {
+            auto& b = tabButtons[i];
+            b.setButtonText (names[i]);
+            b.setClickingTogglesState (false);
+            b.setColour (juce::TextButton::buttonColourId,   buttonBg);
+            b.setColour (juce::TextButton::buttonOnColourId, buttonSelected);
+            b.setColour (juce::TextButton::textColourOffId,  textNormal);
+            b.setColour (juce::TextButton::textColourOnId,   textBright);
+            b.onClick = [this, i] { selectTab (i); };
+            addAndMakeVisible (b);
+        }
 
         doc.setMultiLine (true);
         doc.setReadOnly (true);
         doc.setCaretVisible (false);
         doc.setScrollbarsShown (true);
+        doc.setWantsKeyboardFocus (false);
         doc.setColour (juce::TextEditor::backgroundColourId, panelBackground);
         doc.setColour (juce::TextEditor::outlineColourId, gridLine);
         doc.setColour (juce::TextEditor::focusedOutlineColourId, gridLine);
-        doc.setColour (juce::TextEditor::textColourId, textNormal);
-        doc.setFont (juce::Font (juce::FontOptions (14.0f)));
-        doc.setText (helpText, false);
         addAndMakeVisible (doc);
 
-        setSize (560, bannerHeight + 540);
+        setWantsKeyboardFocus (true);
+        setSize (820, bannerHeight + tabRowHeight + 380);
+        selectTab (0);
+    }
+
+    bool keyPressed (const juce::KeyPress& key) override
+    {
+        if (key == juce::KeyPress::tabKey)
+        {
+            const int next = key.getModifiers().isShiftDown()
+                                 ? (selectedTab + numTabs - 1) % numTabs
+                                 : (selectedTab + 1) % numTabs;
+            selectTab (next);
+            return true;
+        }
+        return false;
     }
 
     void paint (juce::Graphics& g) override
     {
         g.fillAll (background);
 
-        // The logo art is on a black field, so keep the banner black too and let
-        // the image sit within it (scaled to fit, never upscaled past its size).
+        // Keep the banner black to match the logo art's own black field.
         auto banner = getLocalBounds().removeFromTop (bannerHeight);
         g.setColour (juce::Colours::black);
         g.fillRect (banner);
@@ -58,13 +97,227 @@ public:
     {
         auto area = getLocalBounds();
         area.removeFromTop (bannerHeight);
+
+        auto tabRow = area.removeFromTop (tabRowHeight).reduced (2, 4);
+        const int tabW = tabRow.getWidth() / numTabs;
+        for (int i = 0; i < numTabs; ++i)
+            tabButtons[i].setBounds (tabRow.removeFromLeft (
+                i < numTabs - 1 ? tabW : tabRow.getWidth()).reduced (2, 0));
+
         doc.setBounds (area.reduced (2));
     }
 
 private:
+    void selectTab (int index)
+    {
+        selectedTab = index;
+        for (int i = 0; i < numTabs; ++i)
+            tabButtons[i].setToggleState (i == index, juce::dontSendNotification);
+        populateContent (index);
+    }
+
+    void addHeading (const juce::String& text)
+    {
+        doc.setColour (juce::TextEditor::textColourId, accentBright);
+        doc.setFont (juce::Font (juce::FontOptions (15.0f)).boldened());
+        doc.insertTextAtCaret (text + "\n");
+    }
+
+    void addBody (const juce::String& text)
+    {
+        doc.setColour (juce::TextEditor::textColourId, textNormal);
+        doc.setFont (juce::Font (juce::FontOptions (14.0f)));
+        doc.insertTextAtCaret (text + "\n\n");
+    }
+
+    void populateContent (int tabIndex)
+    {
+        doc.clear();
+
+        switch (tabIndex)
+        {
+            case 0: populateOverview();        break;
+            case 1: populateVirtualCable();    break;
+            case 2: populateAudioSettings();   break;
+            case 3: populatePlugins();         break;
+            case 4: populateTroubleshooting(); break;
+        }
+
+        doc.setCaretPosition (0);
+    }
+
+    void populateOverview()
+    {
+        addHeading ("PLUGIN PLAY");
+        addBody ("Plugin Play hosts VST3 effects between your DJ software and your "
+                 "speakers, so you can add reverb, EQ, filters and more to the whole "
+                 "mix in real time.");
+
+        addHeading ("HOW IT WORKS");
+        addBody ("Your DJ software's audio is routed into Plugin Play, passes through "
+                 "the chain of effects you build, and comes out of your chosen output "
+                 "device. Nothing is added to your tracks on disk - it is all live.");
+
+        addHeading ("GETTING STARTED");
+        addBody ("1.  VIRTUAL CABLE - set up the audio route from your DJ software\n"
+                 "     into Plugin Play. See the Virtual Cable tab.\n"
+                 "2.  AUDIO SETTINGS - choose your input and output devices. See the\n"
+                 "     Audio Settings tab.\n"
+                 "3.  SCAN PLUGINS - find the VST3 effects on your system, then add\n"
+                 "     them to the chain. See the Plugins tab.");
+
+        addHeading ("TIPS");
+        addBody ("- Hover over any control for a tooltip that explains it.\n"
+                 "- Save a chain you like as a preset from the PRESETS menu.\n"
+                 "- The LIMITER guards your speakers - leave it on unless you\n"
+                 "   already have your own limiter at the end of the chain.");
+
+        addHeading ("CONTACT");
+        addBody ("For questions, suggestions or bug reports, email "
+                 "TangoToolkit@gmail.com.");
+    }
+
+    void populateVirtualCable()
+    {
+        addHeading ("WHAT IT'S FOR");
+        addBody ("Plugin Play needs your DJ software's audio as an input. A virtual "
+                 "audio cable is a software 'wire' that carries sound between apps: "
+                 "your DJ software plays into the cable, and Plugin Play reads the "
+                 "cable as its input.");
+
+        addHeading ("SETTING IT UP");
+        addBody ("1.  Click VIRTUAL CABLE in the header. Plugin Play checks\n"
+                 "     whether a cable is already installed.\n"
+                 "2.  If none is found, it walks you through installing VB-CABLE:\n"
+                 "     download it, run the installer as admin, then reboot.\n"
+                 "3.  After rebooting, open VIRTUAL CABLE again and Re-check.\n"
+                 "     Once a cable is detected, the routing steps appear.");
+
+        addHeading ("ROUTING YOUR DJ SOFTWARE");
+        addBody ("In your DJ software, set the master / output device to the cable "
+                 "(e.g. 'CABLE Input'). Then in Plugin Play's Audio Settings, set "
+                 "INPUT to the matching 'CABLE Output' and OUTPUT to your speakers "
+                 "or interface.");
+
+        addHeading ("WITHOUT A VIRTUAL CABLE");
+        addBody ("You don't need VB-CABLE if you already have another way to feed "
+                 "your DJ audio back as an input. If your audio interface offers "
+                 "hardware loopback, or your DJ software can output to a device you "
+                 "can also select as an input, set Plugin Play's INPUT to that "
+                 "source and skip the install. A virtual cable is simply the easiest "
+                 "route if you don't already have one.");
+
+        addHeading ("NOTES");
+        addBody ("- VB-CABLE is a free download from vb-audio.com. Plugin Play\n"
+                 "   fetches the latest version and opens its installer for you.\n"
+                 "- Don't set your DJ software's output volume too low, or the\n"
+                 "   captured signal will be quiet and noisy.");
+    }
+
+    void populateAudioSettings()
+    {
+        addHeading ("INPUT & OUTPUT");
+        addBody ("The device bar below the meters has INPUT and OUTPUT selectors. "
+                 "Set INPUT to your virtual cable (the sound coming from your DJ "
+                 "software) and OUTPUT to your speakers or audio interface.");
+
+        addHeading ("EXPANDING THE PANEL");
+        addBody ("Use the expand toggle to reveal the advanced controls:\n"
+                 "- INPUT / OUTPUT PAIR - which channels of a multi-channel device.\n"
+                 "- DRIVER - the audio driver type (e.g. Windows Audio or ASIO).\n"
+                 "- RATE - the sample rate.\n"
+                 "- BUFFER - the block size.");
+
+        addHeading ("SAMPLE RATE & AUTO-MATCH");
+        addBody ("'Auto - match source' sets the rate to match your input so the "
+                 "audio isn't resampled on the way through. If the rate doesn't match "
+                 "the source, a hint warns you that audio is being resampled. Matching "
+                 "rates end to end gives the cleanest, lowest-latency path.");
+
+        addHeading ("BUFFER SIZE");
+        addBody ("A smaller buffer means lower latency but needs more CPU and can "
+                 "crackle if the machine can't keep up. A larger buffer is more "
+                 "stable. Raise it if you hear dropouts.");
+
+        addHeading ("TEST OUTPUT");
+        addBody ("TEST plays a short tone through the current output device so you "
+                 "can confirm it reaches your speakers before you start.");
+    }
+
+    void populatePlugins()
+    {
+        addHeading ("SCANNING FOR PLUGINS");
+        addBody ("Click SCAN PLUGINS to find the VST3 effects installed on your "
+                 "system. Run it once, and again after installing new plugins. The "
+                 "menu also lets you add or remove extra folders to search if you "
+                 "keep VST3s outside the standard locations.");
+
+        addHeading ("BUILDING A CHAIN");
+        addBody ("+ Add Plugin appends an effect to the end of the chain. Audio "
+                 "flows top to bottom, so the order of the cards is the order of "
+                 "processing. Drag a card by its grip dots to reorder effects.");
+
+        addHeading ("PER-EFFECT CONTROLS");
+        addBody ("- ON / OFF - bypass a single effect.\n"
+                 "- OPEN - open the plugin's own editor (or double-click the card).\n"
+                 "- FLOAT - pin an open editor on top of other windows so it stays\n"
+                 "   visible over your DJ software. It does not open the editor.\n"
+                 "- X - remove the effect. Press Ctrl+Z to undo a removal (the\n"
+                 "   plugin returns with its settings and position).");
+
+        addHeading ("MASTER CONTROLS");
+        addBody ("- FX ON / OFF (above the meters) - master bypass for every\n"
+                 "   effect, crossfaded so it won't click.\n"
+                 "- LIMITER - a brickwall safety limiter on the output, on by\n"
+                 "   default. It stops a misbehaving plugin from sending a runaway\n"
+                 "   level to your speakers. Leave it on unless you have your own\n"
+                 "   limiter at the end.");
+
+        addHeading ("PRESETS");
+        addBody ("Save the current chain and reload it later from the PRESETS menu.");
+    }
+
+    void populateTroubleshooting()
+    {
+        addHeading ("NO SOUND AT ALL");
+        addBody ("- Check OUTPUT is set to the right device and press TEST OUTPUT.\n"
+                 "- Check FX ON is showing (not OFF) and the master isn't bypassed.\n"
+                 "- Make sure your DJ software is actually playing.");
+
+        addHeading ("NO INPUT / METERS NOT MOVING");
+        addBody ("- Confirm your DJ software's output is set to the virtual cable.\n"
+                 "- Confirm Plugin Play's INPUT is the matching cable output.\n"
+                 "- Make sure the DJ software's output volume isn't turned down\n"
+                 "   too low.");
+
+        addHeading ("A PLUGIN DOESN'T APPEAR");
+        addBody ("- Run SCAN PLUGINS again; use the menu to add its folder if it\n"
+                 "   lives outside the standard VST3 locations.\n"
+                 "- Only VST3 effect plugins are supported.");
+
+        addHeading ("CRACKLES OR DROPOUTS");
+        addBody ("- Raise the BUFFER size in the expanded Audio Settings.\n"
+                 "- Match the sample rate to the source (Auto - match source) so\n"
+                 "   the audio isn't being resampled.\n"
+                 "- Bypass heavy effects to find the one overloading the CPU.");
+
+        addHeading ("AUDIO SOUNDS RESAMPLED");
+        addBody ("If the rate hint warns about resampling, enable 'Auto - match "
+                 "source' or set RATE to match your DJ software's sample rate.");
+
+        addHeading ("STILL STUCK?");
+        addBody ("Email TangoToolkit@gmail.com describing your setup and what "
+                 "you're seeing.");
+    }
+
+    static constexpr int numTabs      = 5;
     static constexpr int bannerHeight = 150;
+    static constexpr int tabRowHeight = 34;
+
     juce::Image logo;
+    juce::TextButton tabButtons[numTabs];
     juce::TextEditor doc;
+    int selectedTab = 0;
 };
 } // namespace
 
@@ -205,6 +458,7 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
     : engine (engineToUse), scanner (scannerToUse)
 {
     scanButton.onClick      = [this] { showScanMenu(); };
+    sourceButton.onClick    = [this] { InputSourcePicker::launch (engine); };
     cableButton.onClick     = [this] { CableSetupComponent::launch (engine.deviceManager); };
     helpButton.onClick      = [this] { showHelp(); };
     presetsButton.onClick   = [this] { showPresetsMenu(); };
@@ -224,6 +478,7 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
     addPluginButton.onClick = [this] { showAddPluginMenu (addPluginButton.getScreenPosition()); };
 
     scanButton    .setTooltip ("Scan for installed VST3 plugins, or manage extra scan folders");
+    sourceButton  .setTooltip ("Choose the input: an audio device, or capture a running app directly (no install)");
     cableButton   .setTooltip ("Set up the virtual audio cable that captures your DJ software");
     helpButton    .setTooltip ("Open the Plugin Play help & documentation");
     presetsButton .setTooltip ("Save the current chain, or load a saved one");
@@ -232,6 +487,7 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
     addPluginButton.setTooltip ("Add a plugin to the end of the effect chain");
 
     addAndMakeVisible (scanButton);
+    addAndMakeVisible (sourceButton);
     addAndMakeVisible (cableButton);
     addAndMakeVisible (helpButton);
     addAndMakeVisible (presetsButton);
@@ -418,16 +674,29 @@ void MainComponent::paint (juce::Graphics& g)
     g.setColour (gridLine);
     g.fillRect (header.removeFromBottom (1));
 
-    // Square app logo, then the wordmark beside it.
+    // App logo, then the wordmark beside it. The source icon carries tall black
+    // margins above and below the artwork, so trim them (once) to a tighter band
+    // that fills the header height instead of floating in a black square.
     int textX = 16;
-    static const auto logo = juce::ImageCache::getFromMemory (BinaryData::exe_logo_transparent_png,
-                                                              BinaryData::exe_logo_transparent_pngSize);
+    static const auto logo = [
+    ]
+    {
+        auto img = juce::ImageCache::getFromMemory (BinaryData::exe_logo_transparent_png,
+                                                    BinaryData::exe_logo_transparent_pngSize);
+        if (img.isValid())
+        {
+            const int y = juce::roundToInt (img.getHeight() * 0.20f);
+            const int h = juce::roundToInt (img.getHeight() * 0.60f);
+            img = img.getClippedImage ({ 0, y, img.getWidth(), h });
+        }
+        return img;
+    }();
     if (logo.isValid())
     {
-        const int logoSize = 40;
-        g.drawImageWithin (logo, 12, (56 - logoSize) / 2, logoSize, logoSize,
+        const int logoW = 46, logoH = 40;
+        g.drawImageWithin (logo, 12, (56 - logoH) / 2, logoW, logoH,
                            juce::RectanglePlacement::centred, false);
-        textX = 12 + logoSize + 10;
+        textX = 12 + logoW + 8;
     }
 
     const juce::Font wordmarkFont (juce::FontOptions (22.0f, juce::Font::bold));
@@ -470,6 +739,8 @@ void MainComponent::resized()
     helpButton.setBounds (header.removeFromRight (64));
     header.removeFromRight (8);
     cableButton.setBounds (header.removeFromRight (124));
+    header.removeFromRight (8);
+    sourceButton.setBounds (header.removeFromRight (118));
 
     // Meter row: IN meter | FX kill switch | OUT meter | LIMITER.
     auto meterRow = area.removeFromTop (40).reduced (16, 6);
@@ -705,56 +976,7 @@ void MainComponent::addScanFolder()
 
 void MainComponent::showHelp()
 {
-    auto content = std::make_unique<HelpContent> (
-        "PLUGIN PLAY - HELP\n"
-        "\n"
-        "Plugin Play hosts VST3 effects between your DJ software and your\n"
-        "speakers, so you can add reverb, EQ, filters and more to the whole mix\n"
-        "in real time.\n"
-        "\n"
-        "GETTING STARTED\n"
-        "\n"
-        "1.  VIRTUAL CABLE - click this to install and configure a virtual audio\n"
-        "    cable. Your DJ software outputs to the cable, and Plugin Play reads\n"
-        "    the cable as its input.\n"
-        "\n"
-        "2.  AUDIO SETTINGS - choose your INPUT (the cable) and OUTPUT (your\n"
-        "    speakers or interface). Expand the panel for the channel pairs, the\n"
-        "    driver type, and the sample rate and buffer size. 'Auto' matches the\n"
-        "    source rate to avoid an extra resample; a smaller buffer means lower\n"
-        "    latency but less stability. TEST plays a tone through your output.\n"
-        "\n"
-        "3.  SCAN PLUGINS - finds the VST3 effects installed on your system. Run\n"
-        "    this once (and again after installing new plugins).\n"
-        "\n"
-        "BUILDING A CHAIN\n"
-        "\n"
-        "  -  Add Plugin - appends an effect to the end of the chain. Audio flows\n"
-        "     top to bottom through the chain.\n"
-        "  -  Drag a card by its grip dots to reorder effects.\n"
-        "  -  ON / OFF - bypass a single effect.\n"
-        "  -  OPEN - open the plugin's own editor (or double-click the card).\n"
-        "  -  FLOAT - a toggle that pins an open editor on top of other windows so\n"
-        "     it stays visible over your DJ software. It does not open the editor.\n"
-        "  -  X (remove) - takes the effect out of the chain. Press Ctrl+Z to undo\n"
-        "     a removal (the plugin comes back with its settings and position).\n"
-        "  -  FX ON / OFF (top of the meters) - master bypass for every effect,\n"
-        "     crossfaded so it won't click.\n"
-        "\n"
-        "LIMITER\n"
-        "\n"
-        "  A brickwall safety limiter sits on the output (on by default). It stops\n"
-        "  a misbehaving plugin from sending a runaway level to your speakers.\n"
-        "  Leave it on unless you have your own limiter at the end of the chain.\n"
-        "\n"
-        "SCAN PLUGINS\n"
-        "\n"
-        "  Click SCAN for a menu: scan now, or add/remove extra folders to search\n"
-        "  if you keep VST3s outside the standard locations.\n"
-        "\n"
-        "PRESETS\n"
-        "\n"
-        "  Save the current chain and reload it later from the PRESETS menu.\n");
+    auto content = std::make_unique<HelpContent>();
 
     juce::DialogWindow::LaunchOptions options;
     options.content.setOwned (content.release());
@@ -1125,8 +1347,17 @@ void MainComponent::applyBufferSize (int frames)
 
 double MainComponent::recommendedSampleRate() const
 {
-    // The rate the source is really running at in Windows — matching it avoids an
-    // extra resample of the signal we care about (the captured DJ audio).
+    // The "source rate" only means something for the WASAPI shared-mode path: it's
+    // the Windows mix-format rate of the input endpoint. Under ASIO (or exclusive
+    // WASAPI) the device runs at its own rate, and the shared mix rate is unrelated
+    // — consulting it there produces a bogus "being resampled" warning and, with
+    // Auto on, a pointless device reopen chasing a rate that doesn't apply. So only
+    // report it for shared Windows Audio input.
+    const auto deviceType = engine.deviceManager.getCurrentAudioDeviceType();
+    if (! deviceType.containsIgnoreCase ("Windows Audio")
+          || deviceType.containsIgnoreCase ("Exclusive"))
+        return 0.0;
+
     const auto inputName = engine.deviceManager.getAudioDeviceSetup().inputDeviceName;
     return WasapiEndpoints::mixRateForDevice (inputName, true);
 }
@@ -1189,7 +1420,19 @@ void MainComponent::openPluginEditor (int slotIndex)
         auto nodeID = slot.nodeID;
         auto window = std::make_unique<PluginWindow> (
             *processor, slot.description.name,
-            [this, nodeID] { closePluginWindow (nodeID); });
+            // The user hit the window's own close button, so we're running inside
+            // PluginWindow::closeButtonPressed (dispatched from the native WM_CLOSE
+            // handler). Erasing the window here would delete it — and its peer —
+            // mid-callback, a use-after-free on unwind. Defer to the next message
+            // loop, guarded in case the whole component is torn down first.
+            [safeThis = juce::Component::SafePointer<MainComponent> (this), nodeID]
+            {
+                juce::MessageManager::callAsync ([safeThis, nodeID]
+                {
+                    if (safeThis != nullptr)
+                        safeThis->closePluginWindow (nodeID);
+                });
+            });
 
         // Honour the FLOAT toggle if it was set while the editor was closed.
         if (isSlotFloating (slotIndex))

@@ -1,12 +1,14 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include "LoopbackCapture.h"
 
 namespace play
 {
 
 class MasterProcessor;
 class PluginNode;
+class CaptureSourceProcessor;
 
 //==============================================================================
 /** One entry in the serial FX chain. */
@@ -60,6 +62,22 @@ public:
         the session. */
     void setLimiterEnabled (bool shouldLimit);
     bool isLimiterEnabled() const noexcept          { return limiterEnabled; }
+
+    //==============================================================================
+    /** Input routing. The chain is fed either by the selected input DEVICE
+        (default; virtual-cable / hardware-loopback path) or by DRIVERLESS
+        process-loopback CAPTURE of a chosen application, which also master-mutes
+        the default render endpoint to kill the app's dry signal at the speakers. */
+    std::vector<AudioSource> availableCaptureSources() const { return enumerateAudioSources(); }
+
+    /** Switch the chain's input to driverless capture of the given process. */
+    void setCaptureSource (juce::uint32 pid);
+
+    /** Switch the chain's input back to the selected audio input device. */
+    void setDeviceInput();
+
+    bool isCapturingInput() const noexcept          { return useCaptureInput; }
+    juce::uint32 capturedSourcePid() const noexcept { return capture.targetPid(); }
 
     //==============================================================================
     /** Restores the most recently removed plugin (state and position intact).
@@ -124,7 +142,7 @@ private:
     void rebuildConnections();
     void connectNodes (juce::AudioProcessorGraph::NodeID source, juce::AudioProcessorGraph::NodeID dest);
     void restoreChainFromXml (std::shared_ptr<juce::XmlElement> chainXml, int slotIndex,
-                              std::shared_ptr<juce::StringArray> failures);
+                              std::shared_ptr<juce::StringArray> failures, int generation);
     void insertPluginFromXml (std::unique_ptr<juce::XmlElement> slotXml, int index);
 
     /** The bypass/limiter wrapper hosting the plugin at a slot, or nullptr. */
@@ -139,8 +157,15 @@ private:
     MeterTap meterTap { player, *this };
 
     juce::AudioProcessorGraph::NodeID inputNodeID, outputNodeID, masterNodeID;
+    juce::AudioProcessorGraph::NodeID captureSourceNodeID;
     MasterProcessor* master = nullptr;
     std::vector<PluginSlotInfo> slots;
+
+    // Driverless process-loopback capture. When useCaptureInput is true the chain
+    // head is captureSourceNode (fed by `capture`) instead of the device input.
+    LoopbackCapture capture;
+    bool useCaptureInput = false;
+    double captureStartedRate = 0.0;
 
     std::atomic<float> inputPeaks[2]  { 0.0f, 0.0f };
     std::atomic<float> outputPeaks[2] { 0.0f, 0.0f };
@@ -148,6 +173,11 @@ private:
     bool restoringSession = false;
     bool masterBypassed = false;
     bool limiterEnabled = true;
+
+    // Bumped by every clearChain/loadPreset/loadSession. In-flight async plugin
+    // instantiations from a superseded restore compare against this and bail, so
+    // a new load can't have a previous load's late plugins appended to it.
+    int restoreGeneration = 0;
 
     // One level of undo for plugin removal: the removed slot's serialized state
     // and the index it was at.

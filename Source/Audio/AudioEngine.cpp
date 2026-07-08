@@ -8,6 +8,45 @@ namespace play
 using Graph  = juce::AudioProcessorGraph;
 using IONode = juce::AudioProcessorGraph::AudioGraphIOProcessor;
 
+//==============================================================================
+/** Graph head node for driverless capture mode: a 0-in / 2-out source that pulls
+    the process-loopback FIFO in processBlock (lock-free, no allocation). It lives
+    in the graph permanently but is only connected while capture is the input. */
+class CaptureSourceProcessor : public juce::AudioProcessor
+{
+public:
+    explicit CaptureSourceProcessor (LoopbackCapture& c)
+        : juce::AudioProcessor (BusesProperties()
+              .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
+          capture (c) {}
+
+    const juce::String getName() const override        { return "Capture Source"; }
+    void prepareToPlay (double, int) override           {}
+    void releaseResources() override                    {}
+
+    void processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) override
+    {
+        capture.read (buffer.getArrayOfWritePointers(),
+                      buffer.getNumChannels(), buffer.getNumSamples());
+    }
+
+    double getTailLengthSeconds() const override        { return 0.0; }
+    bool acceptsMidi() const override                   { return false; }
+    bool producesMidi() const override                  { return false; }
+    juce::AudioProcessorEditor* createEditor() override  { return nullptr; }
+    bool hasEditor() const override                     { return false; }
+    int getNumPrograms() override                       { return 1; }
+    int getCurrentProgram() override                    { return 0; }
+    void setCurrentProgram (int) override               {}
+    const juce::String getProgramName (int) override    { return {}; }
+    void changeProgramName (int, const juce::String&) override {}
+    void getStateInformation (juce::MemoryBlock&) override {}
+    void setStateInformation (const void*, int) override {}
+
+private:
+    LoopbackCapture& capture;
+};
+
 // Chain edits save after a short debounce; the long interval keeps autosaving
 // so plugin parameter tweaks (which broadcast nothing) survive a crash.
 static constexpr int saveDebounceMs     = 1000;
@@ -57,6 +96,9 @@ AudioEngine::AudioEngine()
     masterNodeID = graph.addNode (std::move (masterProcessor))->nodeID;
     master->setLimiterEnabled (limiterEnabled);
 
+    // Head node used only in driverless capture mode; disconnected otherwise.
+    captureSourceNodeID = graph.addNode (std::make_unique<CaptureSourceProcessor> (capture))->nodeID;
+
     player.setProcessor (&graph);
     deviceManager.addAudioCallback (&meterTap);
     deviceManager.addChangeListener (this);
@@ -72,6 +114,7 @@ AudioEngine::~AudioEngine()
     deviceManager.removeChangeListener (this);
     deviceManager.removeAudioCallback (&meterTap);
     player.setProcessor (nullptr);
+    capture.stop();          // join the capture thread and restore the endpoint mute
     graph.clear();
 }
 
@@ -164,6 +207,10 @@ void AudioEngine::undoRemove()
 
 void AudioEngine::clearChain()
 {
+    // Supersede any restore still instantiating plugins in the background so its
+    // late callbacks don't push_back into the now-cleared chain.
+    ++restoreGeneration;
+
     while (! slots.empty())
         removePlugin ((int) slots.size() - 1);
 
@@ -236,11 +283,48 @@ void AudioEngine::setLimiterEnabled (bool shouldLimit)
 }
 
 //==============================================================================
+void AudioEngine::setCaptureSource (juce::uint32 targetPid)
+{
+    // Match the capture rate to the output device so Windows resamples the source
+    // and our FIFO only absorbs clock drift.
+    captureStartedRate = currentSampleRate();
+    capture.start (targetPid, captureStartedRate);
+
+    useCaptureInput = true;
+    rebuildConnections();
+    sendChangeMessage();
+}
+
+void AudioEngine::setDeviceInput()
+{
+    capture.stop();
+
+    useCaptureInput = false;
+    rebuildConnections();
+    sendChangeMessage();
+}
+
+//==============================================================================
 void AudioEngine::changeListenerCallback (juce::ChangeBroadcaster*)
 {
     // Device changed: channel counts of the graph's IO nodes may have changed,
     // so re-add the connections, and persist the new device setup.
     rebuildConnections();
+
+    // If we're capturing and the output device's rate changed, re-open the capture
+    // at the new rate so the FIFO stays 1:1 (no per-block resampling on our side).
+    // Skip a restart for a buffer-size-only change — it would needlessly bounce the
+    // endpoint mute.
+    if (useCaptureInput && capture.isActive())
+    {
+        const auto rate = currentSampleRate();
+        if (std::abs (rate - captureStartedRate) > 1.0)
+        {
+            capture.start (capture.targetPid(), rate);   // start() stops first; re-mutes
+            captureStartedRate = rate;
+        }
+    }
+
     scheduleSave();
     sendChangeMessage();
 }
@@ -282,7 +366,8 @@ void AudioEngine::rebuildConnections()
 
     // Plain serial chain; the master (limiter) node sits just before the output.
     // Each plugin wrapper handles its own clickless, latency-aligned bypass.
-    auto previous = inputNodeID;
+    // The head is either the device input node or the driverless capture source.
+    auto previous = useCaptureInput ? captureSourceNodeID : inputNodeID;
 
     for (auto& slot : slots)
     {
@@ -386,13 +471,13 @@ bool AudioEngine::loadPreset (const juce::File& presetFile)
     if (xml == nullptr || ! xml->hasTagName ("CHAIN"))
         return false;
 
-    clearChain();
+    clearChain();   // bumps restoreGeneration
 
     if (xml->getNumChildElements() > 0)
     {
         restoringSession = true;
         restoreChainFromXml (std::shared_ptr<juce::XmlElement> (xml.release()), 0,
-                             std::make_shared<juce::StringArray>());
+                             std::make_shared<juce::StringArray>(), restoreGeneration);
     }
 
     return true;
@@ -400,6 +485,8 @@ bool AudioEngine::loadPreset (const juce::File& presetFile)
 
 void AudioEngine::loadSession()
 {
+    ++restoreGeneration;   // supersede any restore already in flight
+
     std::unique_ptr<juce::XmlElement> session;
 
     if (auto file = getSessionFile(); file.existsAsFile())
@@ -427,7 +514,7 @@ void AudioEngine::loadSession()
             {
                 restoringSession = true;
                 auto chainCopy = std::make_shared<juce::XmlElement> (*chain);
-                restoreChainFromXml (chainCopy, 0, std::make_shared<juce::StringArray>());
+                restoreChainFromXml (chainCopy, 0, std::make_shared<juce::StringArray>(), restoreGeneration);
                 return;
             }
         }
@@ -437,13 +524,26 @@ void AudioEngine::loadSession()
 }
 
 void AudioEngine::restoreChainFromXml (std::shared_ptr<juce::XmlElement> chainXml, int slotIndex,
-                                       std::shared_ptr<juce::StringArray> failures)
+                                       std::shared_ptr<juce::StringArray> failures, int generation)
 {
+    // A newer load (or a clearChain) has superseded this restore: stop without
+    // touching the chain or the saved session.
+    if (generation != restoreGeneration)
+        return;
+
     if (slotIndex >= chainXml->getNumChildElements())
     {
         restoringSession = false;
         rebuildConnections();
-        saveSession();
+
+        // Only persist the restored chain if every plugin came back. If any
+        // failed to instantiate (a momentarily-locked file, a slow-to-mount
+        // drive, a rate-init failure), saving now would overwrite the on-disk
+        // session with the pruned chain and delete those plugins for good.
+        // Leaving the file intact lets the next launch retry them.
+        if (failures == nullptr || failures->isEmpty())
+            saveSession();
+
         sendChangeMessage();
 
         if (failures != nullptr && ! failures->isEmpty() && onRestoreErrors != nullptr)
@@ -464,7 +564,7 @@ void AudioEngine::restoreChainFromXml (std::shared_ptr<juce::XmlElement> chainXm
                                ? descriptionXml->getStringAttribute ("name", "Unknown plugin")
                                : "Unknown plugin");
 
-        restoreChainFromXml (chainXml, slotIndex + 1, failures);
+        restoreChainFromXml (chainXml, slotIndex + 1, failures, generation);
         return;
     }
 
@@ -472,13 +572,19 @@ void AudioEngine::restoreChainFromXml (std::shared_ptr<juce::XmlElement> chainXm
     const auto stateBase64 = slotXml->getStringAttribute ("state");
 
     formatManager.createPluginInstanceAsync (description, currentSampleRate(), currentBlockSize(),
-        [safeThis = juce::WeakReference<AudioEngine> (this), chainXml, slotIndex, description, bypassed, stateBase64, failures]
+        [safeThis = juce::WeakReference<AudioEngine> (this), chainXml, slotIndex, description, bypassed, stateBase64, failures, generation]
         (std::unique_ptr<juce::AudioPluginInstance> instance, const juce::String&)
         {
             if (safeThis == nullptr)
                 return;
 
             auto& self = *safeThis;
+
+            // This restore was superseded while the instance was being created
+            // (a new load or a clearChain). Drop the plugin instead of appending
+            // it to whatever chain is current now.
+            if (generation != self.restoreGeneration)
+                return;
 
             if (instance != nullptr)
             {
@@ -502,7 +608,7 @@ void AudioEngine::restoreChainFromXml (std::shared_ptr<juce::XmlElement> chainXm
                 failures->add (description.name);
             }
 
-            self.restoreChainFromXml (chainXml, slotIndex + 1, failures);
+            self.restoreChainFromXml (chainXml, slotIndex + 1, failures, generation);
         });
 }
 

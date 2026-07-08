@@ -35,12 +35,14 @@ target_sources(PluginPlay
         Source/Main.cpp
         Source/Theme.cpp
         Source/Audio/AudioEngine.cpp
+        Source/Audio/LoopbackCapture.cpp
         Source/Audio/WasapiEndpoints.cpp
         Source/Plugins/PluginScanner.cpp
         Source/Setup/VirtualCable.cpp
         Source/UI/MainComponent.cpp
         Source/UI/ChainView.cpp
         Source/UI/PluginPicker.cpp
+        Source/UI/InputSourcePicker.cpp
 )
 
 # JUCE 8 ships its own ASIO interop header, so JUCE_ASIO needs no Steinberg SDK.

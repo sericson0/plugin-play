@@ -149,6 +149,7 @@ private:
     PluginScanner& scanner;
 
     juce::TextButton scanButton       { "SCAN PLUGINS" };
+    juce::TextButton sourceButton     { "INPUT SOURCE" };
     juce::TextButton cableButton      { "VIRTUAL CABLE" };
     juce::TextButton helpButton       { "HELP" };
     juce::TextButton presetsButton    { "PRESETS" };

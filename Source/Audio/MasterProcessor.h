@@ -39,20 +39,38 @@ public:
 
     void processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) override
     {
-        if (! limiterOn.load())
-            return;
-
         const int numSamples  = buffer.getNumSamples();
         const int numChannels = buffer.getNumChannels();
 
         auto* l = buffer.getWritePointer (0);
         auto* r = numChannels > 1 ? buffer.getWritePointer (1) : l;
 
+        // Non-finite guard runs unconditionally — even with the limiter disabled.
+        // A plugin feedback loop or divide-by-zero can emit Inf/NaN; without this,
+        // Inf * gain and jlimit(NaN) both propagate NaN straight to the PA. This is
+        // the actual "a misbehaving plugin can't send garbage to the speakers"
+        // guarantee; the smoothed limiter below is the musical part.
+        if (! limiterOn.load())
+        {
+            for (int n = 0; n < numSamples; ++n)
+            {
+                l[n] = std::isfinite (l[n]) ? l[n] : 0.0f;
+                if (r != l)
+                    r[n] = std::isfinite (r[n]) ? r[n] : 0.0f;
+            }
+            return;
+        }
+
         float gain = gainReduction;
 
         for (int n = 0; n < numSamples; ++n)
         {
-            const float peak    = juce::jmax (std::abs (l[n]), std::abs (r[n]));
+            // Flush non-finite samples to zero before any arithmetic, so Inf can't
+            // become NaN (Inf * 0) and NaN can't slip through the jlimit ceiling.
+            float sl = std::isfinite (l[n]) ? l[n] : 0.0f;
+            float sr = std::isfinite (r[n]) ? r[n] : 0.0f;
+
+            const float peak    = juce::jmax (std::abs (sl), std::abs (sr));
             const float desired = peak > ceilingLinear ? ceilingLinear / peak : 1.0f;
 
             // Instant attack, smoothed release — stereo-linked so the image holds.
@@ -60,8 +78,8 @@ public:
             else                gain = desired + (gain - desired) * releaseCoeff;
 
             // Absolute ceiling guarantees no sample past the limiter exceeds it.
-            l[n] = juce::jlimit (-ceilingLinear, ceilingLinear, l[n] * gain);
-            r[n] = juce::jlimit (-ceilingLinear, ceilingLinear, r[n] * gain);
+            l[n] = juce::jlimit (-ceilingLinear, ceilingLinear, sl * gain);
+            r[n] = juce::jlimit (-ceilingLinear, ceilingLinear, sr * gain);
         }
 
         gainReduction = gain;
