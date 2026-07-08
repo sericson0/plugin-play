@@ -39,10 +39,10 @@ public:
 
         bypassButton.setTooltip ("Toggle this effect on or off (bypass)");
         openButton  .setTooltip ("Open this plugin's editor window");
-        floatButton .setTooltip ("Pin this plugin's editor on top of other windows — "
+        floatButton .setTooltip ("Pin this plugin's editor on top of other windows - "
                                  "keep it visible over your DJ software. Does not open the editor.");
         removeButton.setTooltip ("Remove this plugin from the chain");
-        setTooltip ("Drag to reorder — double-click to open the editor");
+        setTooltip ("Drag to reorder - double-click to open the editor");
 
         addAndMakeVisible (bypassButton);
         addAndMakeVisible (openButton);
@@ -75,10 +75,23 @@ public:
         auto bounds = getLocalBounds().toFloat().reduced (0.5f);
         const auto& slot = owner.engine.getSlot (index);
 
-        g.setColour (dragging ? buttonBgHover : buttonBg);
+        // A dragged card is "lifted" — cast a soft shadow behind it.
+        if (dragging)
+        {
+            juce::DropShadow (juce::Colours::black.withAlpha (0.5f), 12, { 0, 4 })
+                .drawForRectangle (g, getLocalBounds().reduced (2));
+        }
+
+        // Bypassed slots sink toward the panel background so their off state reads
+        // from across the room; hovered/dragged cards lift toward the hover tint.
+        juce::Colour fill = slot.bypassed ? panelBackground.brighter (0.04f)
+                                          : (dragging || hovered ? buttonBgHover : buttonBg);
+        g.setColour (fill);
         g.fillRoundedRectangle (bounds, 7.0f);
 
-        g.setColour (dragging ? accent : gridLine.brighter (0.3f));
+        g.setColour (dragging ? accent
+                              : (hovered ? gridLine.brighter (0.6f)
+                                         : gridLine.brighter (slot.bypassed ? 0.1f : 0.3f)));
         g.drawRoundedRectangle (bounds, 7.0f, dragging ? 1.5f : 1.0f);
 
         auto area = getLocalBounds().reduced (12, 8);
@@ -162,10 +175,27 @@ public:
             owner.onOpenEditor (index);
     }
 
+    // Moving between the card and its own child buttons fires enter/exit; treat
+    // "over any child" as still hovered so the highlight doesn't flicker.
+    void mouseEnter (const juce::MouseEvent&) override { updateHover(); }
+    void mouseExit  (const juce::MouseEvent&) override { updateHover(); }
+
+    void updateHover()
+    {
+        const bool nowHovered = isMouseOverOrDragging (true);
+        if (nowHovered != hovered)
+        {
+            hovered = nowHovered;
+            repaint();
+        }
+    }
+
     bool dragging = false;
 
 private:
     static int buttonStripWidth() { return 44 + 6 + 54 + 6 + 54 + 6 + 28; }
+
+    bool hovered = false;
 
     ChainView& owner;
     int index;
@@ -266,19 +296,78 @@ void ChainView::paint (juce::Graphics& g)
 {
     if (cards.isEmpty())
     {
-        g.setColour (gridText);
-        g.setFont (juce::Font (juce::FontOptions (14.0f)));
-        g.drawText ("No plugins in the chain yet",
-                    getLocalBounds().removeFromTop (cardGap + 44),
-                    juce::Justification::centred);
+        // A clickable dashed placeholder that doubles as first-run onboarding.
+        emptyStateBounds = getLocalBounds().reduced (8, cardGap).withHeight (44 + cardGap);
+        auto box = emptyStateBounds.toFloat().reduced (0.5f);
+
+        const bool hot = emptyStateBounds.contains (getMouseXYRelative());
+
+        juce::Path outline, dashed;
+        outline.addRoundedRectangle (box, 8.0f);
+        const float dashes[] { 6.0f, 4.0f };
+        juce::PathStrokeType (1.5f).createDashedStroke (dashed, outline, dashes, 2);
+        g.setColour (hot ? accent : gridLine.brighter (0.5f));
+        g.fillPath (dashed);
+
+        g.setColour (hot ? accentBright : gridText);
+        g.setFont (juce::Font (juce::FontOptions (14.0f, juce::Font::bold)));
+        g.drawText (juce::String::fromUTF8 ("\xef\xbc\x8b") + "  Add your first plugin",
+                    emptyStateBounds, juce::Justification::centred);
+        return;
     }
 
-    // connection line down the left edge suggesting signal flow
+    emptyStateBounds = {};
+
+    // Connection line down the left edge with chevrons suggesting signal flow.
     if (cards.size() > 1)
     {
-        g.setColour (gridLine.brighter (0.15f));
-        g.fillRect (24, cardGap + cardHeight / 2, 2,
-                    (cards.size() - 1) * (cardHeight + cardGap));
+        const int x = 25;
+        const int top = cardGap + cardHeight / 2;
+        const int bottom = top + (cards.size() - 1) * (cardHeight + cardGap);
+
+        g.setColour (gridLine.brighter (0.3f));
+        g.fillRect (x - 1, top, 2, bottom - top);
+
+        // A downward chevron centred in each gap between cards.
+        g.setColour (accentDim);
+        for (int i = 0; i < cards.size() - 1; ++i)
+        {
+            const float cy = (float) (cardGap + cardHeight + i * (cardHeight + cardGap) + cardGap / 2);
+            juce::Path chevron;
+            chevron.startNewSubPath ((float) x - 3.0f, cy - 2.0f);
+            chevron.lineTo          ((float) x,        cy + 2.0f);
+            chevron.lineTo          ((float) x + 3.0f, cy - 2.0f);
+            g.strokePath (chevron, juce::PathStrokeType (1.5f));
+        }
+    }
+
+    // While dragging, draw an accent insert line at the drop position so the
+    // destination is unambiguous even when the gap shift is subtle.
+    if (draggedCard != nullptr && dropTargetIndex >= 0)
+    {
+        const int y = cardGap + dropTargetIndex * (cardHeight + cardGap) - cardGap / 2;
+        g.setColour (accent);
+        g.fillRect (4, y - 1, getWidth() - 8, 2);
+    }
+}
+
+void ChainView::mouseUp (const juce::MouseEvent& e)
+{
+    // Only the empty-state placeholder handles clicks directly; cards handle
+    // their own mouse events, so this only fires when the chain is empty.
+    if (cards.isEmpty() && onAddPlugin != nullptr && emptyStateBounds.contains (e.getPosition()))
+        onAddPlugin();
+}
+
+void ChainView::mouseMove (const juce::MouseEvent&)
+{
+    // Repaint so the placeholder can highlight under the pointer.
+    if (cards.isEmpty())
+    {
+        setMouseCursor (emptyStateBounds.contains (getMouseXYRelative())
+                            ? juce::MouseCursor::PointingHandCursor
+                            : juce::MouseCursor::NormalCursor);
+        repaint();
     }
 }
 

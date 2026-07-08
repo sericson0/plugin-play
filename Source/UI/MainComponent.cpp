@@ -35,6 +35,7 @@ void LevelMeter::pushLevels (float left, float right)
             clipped = true;
     }
 
+    clipGlowPhase += 0.3f;
     repaint();
 }
 
@@ -54,7 +55,22 @@ void LevelMeter::paint (juce::Graphics& g)
     g.drawText (label, area.removeFromLeft (28), juce::Justification::centredLeft);
 
     // Latching clip light at the right-hand end; click the meter to reset.
-    auto lamp = area.removeFromRight (10).reduced (0, 6).toFloat();
+    auto lampArea = area.removeFromRight (10);
+    auto lamp = lampArea.reduced (0, 6).toFloat();
+
+    if (clipped)
+    {
+        // Soft pulsing glow behind the lamp so a clip is unmissable peripherally.
+        const float pulse = 0.5f + 0.5f * std::sin (clipGlowPhase);
+        auto glowCentre = lamp.getCentre();
+        for (int ring = 3; ring >= 1; --ring)
+        {
+            const float r = (float) ring * 5.0f;
+            g.setColour (metricBad.withAlpha (0.10f + 0.10f * pulse));
+            g.fillEllipse (juce::Rectangle<float> (r * 2.0f, r * 2.0f).withCentre (glowCentre));
+        }
+    }
+
     g.setColour (clipped ? metricBad : sliderTrack);
     g.fillRoundedRectangle (lamp, 2.0f);
     area.removeFromRight (4);
@@ -65,6 +81,10 @@ void LevelMeter::paint (juce::Graphics& g)
         return juce::jlimit (0.0f, 1.0f, juce::jmap (dB, -60.0f, 0.0f, 0.0f, 1.0f));
     };
 
+    // Zone boundaries as bar proportions: green up to -12 dB, amber to -3 dB, red above.
+    const float amberStart = proportionFor (juce::Decibels::decibelsToGain (-12.0f));
+    const float redStart   = proportionFor (juce::Decibels::decibelsToGain (-3.0f));
+
     auto barArea = area.reduced (0, 4);
     const int barHeight = (barArea.getHeight() - 3) / 2;
 
@@ -72,18 +92,41 @@ void LevelMeter::paint (juce::Graphics& g)
     {
         auto bar = ch == 0 ? barArea.removeFromTop (barHeight)
                            : barArea.removeFromBottom (barHeight);
+        auto barF = bar.toFloat();
 
         g.setColour (sliderTrack);
-        g.fillRoundedRectangle (bar.toFloat(), 2.0f);
+        g.fillRoundedRectangle (barF, 2.0f);
 
-        const auto dB = juce::Decibels::gainToDecibels (display[ch], -60.0f);
+        // Faint gain-staging ticks at the -12 and -3 dB zone edges.
+        g.setColour (gridLine.brighter (0.4f));
+        for (float tick : { amberStart, redStart })
+        {
+            const float x = barF.getX() + barF.getWidth() * tick;
+            g.fillRect (x, barF.getY(), 1.0f, barF.getHeight());
+        }
+
         const auto proportion = proportionFor (display[ch]);
 
         if (proportion > 0.001f)
         {
-            auto fill = bar.toFloat().withWidth ((float) bar.getWidth() * proportion);
-            g.setColour (dB > -3.0f ? metricBad : (dB > -12.0f ? metricWarn : metricGood));
-            g.fillRoundedRectangle (fill, 2.0f);
+            // Clip the coloured zones to the rounded fill so only the lit portion
+            // of each band shows, with green/amber/red segments in place.
+            auto fill = barF.withWidth (barF.getWidth() * proportion);
+            juce::Path fillPath;
+            fillPath.addRoundedRectangle (fill, 2.0f);
+
+            juce::Graphics::ScopedSaveState state (g);
+            g.reduceClipRegion (fillPath);
+
+            const float amberX = barF.getX() + barF.getWidth() * amberStart;
+            const float redX   = barF.getX() + barF.getWidth() * redStart;
+
+            g.setColour (metricGood);
+            g.fillRect (barF.getX(), barF.getY(), amberX - barF.getX(), barF.getHeight());
+            g.setColour (metricWarn);
+            g.fillRect (amberX, barF.getY(), redX - amberX, barF.getHeight());
+            g.setColour (metricBad);
+            g.fillRect (redX, barF.getY(), barF.getRight() - redX, barF.getHeight());
         }
 
         const auto holdProportion = proportionFor (peakHold[ch]);
@@ -109,9 +152,12 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
     killButton.setColour (juce::TextButton::textColourOffId, accentBright);
     killButton.setColour (juce::TextButton::buttonOnColourId, metricBad.darker (0.5f));
 
+    // Styled to match the FX ON kill switch it sits beside on the meter row:
+    // gray background with orange text in the normal (limiter on) state, with the
+    // toggled/coloured background reserved for the alert (limiter off) state.
     limiterButton.onClick   = [this] { engine.setLimiterEnabled (! engine.isLimiterEnabled()); updateLimiterButton(); };
-    limiterButton.setColour (juce::TextButton::textColourOffId, gridText);
-    limiterButton.setColour (juce::TextButton::buttonOnColourId, metricGood.darker (0.4f));
+    limiterButton.setColour (juce::TextButton::textColourOffId, accentBright);
+    limiterButton.setColour (juce::TextButton::buttonOnColourId, metricWarn.darker (0.5f));
 
     // "Add Plugin" is the primary action but should read like the other toolbar
     // buttons rather than a filled orange call-to-action.
@@ -121,8 +167,8 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
     cableButton   .setTooltip ("Set up the virtual audio cable that captures your DJ software");
     helpButton    .setTooltip ("Open the Plugin Play help & documentation");
     presetsButton .setTooltip ("Save the current chain, or load a saved one");
-    killButton    .setTooltip ("Master bypass — turn every effect on or off at once");
-    limiterButton .setTooltip ("Brickwall safety limiter on the output — protects against runaway plugin levels");
+    killButton    .setTooltip ("Master bypass - turn every effect on or off at once");
+    limiterButton .setTooltip ("Brickwall safety limiter on the output - protects against runaway plugin levels");
     addPluginButton.setTooltip ("Add a plugin to the end of the effect chain");
 
     addAndMakeVisible (scanButton);
@@ -150,7 +196,8 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
         uiPrefs = std::make_unique<juce::PropertiesFile> (opts);
     }
 
-    for (auto* l : { &inputLabel, &outputLabel, &driverLabel, &rateLabel, &bufferLabel })
+    for (auto* l : { &inputLabel, &outputLabel, &inputChannelLabel, &outputChannelLabel,
+                     &driverLabel, &rateLabel, &bufferLabel })
     {
         l->setFont (juce::Font (juce::FontOptions (11.0f, juce::Font::bold)));
         l->setColour (juce::Label::textColourId, gridText);
@@ -175,13 +222,13 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
         // repopulates every selector for the new driver's devices.
     };
 
-    inputSelector       .setTooltip ("Audio input device — the capture source (usually the virtual cable)");
-    outputSelector      .setTooltip ("Audio output device — where processed audio is sent");
+    inputSelector       .setTooltip ("Audio input device - the capture source (usually the virtual cable)");
+    outputSelector      .setTooltip ("Audio output device - where processed audio is sent");
     inputChannelSelector .setTooltip ("Which channel pair of the input device to capture");
     outputChannelSelector.setTooltip ("Which channel pair of the output device to play to");
-    deviceTypeSelector  .setTooltip ("Audio driver type — ASIO gives the lowest latency if available");
-    sampleRateSelector  .setTooltip ("Sample rate — 'Auto' follows your source to avoid an extra resample");
-    bufferSizeSelector  .setTooltip ("Buffer size — smaller means lower latency, larger means more stable");
+    deviceTypeSelector  .setTooltip ("Audio driver type - ASIO gives the lowest latency if available");
+    sampleRateSelector  .setTooltip ("Sample rate - 'Auto' follows your source to avoid an extra resample");
+    bufferSizeSelector  .setTooltip ("Buffer size - smaller means lower latency, larger means more stable");
     testButton          .setTooltip ("Play a short test tone through the current output device");
 
     testButton.setColour (juce::TextButton::textColourOffId, accentBright);
@@ -190,8 +237,7 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
     autoRate      = uiPrefs->getBoolValue ("autoRate", true);
     audioExpanded = uiPrefs->getBoolValue ("audioExpanded", true);
 
-    audioToggleButton.setColour (juce::TextButton::buttonColourId, panelBackground);
-    audioToggleButton.setColour (juce::TextButton::textColourOffId, accentBright);
+    // Left with the default button colours so it reads like the other toolbar buttons.
     audioToggleButton.setTooltip ("Show or hide the channel, driver, sample-rate and buffer settings");
     audioToggleButton.onClick = [this] { setAudioExpanded (! audioExpanded); };
     addAndMakeVisible (audioToggleButton);
@@ -227,6 +273,8 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
 
     addAndMakeVisible (inputSelector);
     addAndMakeVisible (outputSelector);
+    addAndMakeVisible (inputChannelLabel);
+    addAndMakeVisible (outputChannelLabel);
     addAndMakeVisible (inputChannelSelector);
     addAndMakeVisible (outputChannelSelector);
     addAndMakeVisible (deviceTypeSelector);
@@ -237,7 +285,8 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
 
     // Input/output device selection is always visible; the channel, driver,
     // rate and buffer controls only show while the audio area is expanded.
-    juce::Component* expandedControls[] { &inputChannelSelector, &outputChannelSelector,
+    juce::Component* expandedControls[] { &inputChannelLabel, &outputChannelLabel,
+                                          &inputChannelSelector, &outputChannelSelector,
                                           &driverLabel, &deviceTypeSelector,
                                           &rateLabel, &bufferLabel,
                                           &sampleRateSelector, &bufferSizeSelector,
@@ -248,6 +297,7 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
     chainView.onOpenEditor  = [this] (int index) { openPluginEditor (index); };
     chainView.onFloatEditor = [this] (int index, bool shouldFloat) { setPluginFloating (index, shouldFloat); };
     chainView.isFloating    = [this] (int index) { return isSlotFloating (index); };
+    chainView.onAddPlugin   = [this] { showAddPluginMenu (addPluginButton.getScreenPosition()); };
 
     viewport.setViewedComponent (&chainView, false);
     viewport.setScrollBarsShown (true, false);
@@ -257,6 +307,12 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
     statusLabel.setColour (juce::Label::textColourId, gridText);
     statusLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
     addAndMakeVisible (statusLabel);
+
+    cpuLabel.setJustificationType (juce::Justification::centredRight);
+    cpuLabel.setColour (juce::Label::textColourId, gridText);
+    cpuLabel.setFont (juce::Font (juce::FontOptions (12.0f, juce::Font::bold)));
+    cpuLabel.setTooltip ("Audio processing load - amber over 60%, red over 85%");
+    addAndMakeVisible (cpuLabel);
 
     engine.addChangeListener (this);
     scanner.addChangeListener (this);
@@ -314,11 +370,22 @@ void MainComponent::paint (juce::Graphics& g)
         textX = 12 + logoSize + 10;
     }
 
+    const juce::Font wordmarkFont (juce::FontOptions (22.0f, juce::Font::bold));
+    g.setFont (wordmarkFont);
+
+    // Measure "PLUGIN " so "PLAY" sits flush regardless of font/size changes.
+    const int firstWidth = juce::GlyphArrangement::getStringWidthInt (wordmarkFont, "PLUGIN ");
+
     g.setColour (accent);
-    g.setFont (juce::Font (juce::FontOptions (22.0f, juce::Font::bold)));
-    g.drawText ("PLUGIN", textX, 0, 90, 56, juce::Justification::centredLeft);
+    g.drawText ("PLUGIN", textX, 0, firstWidth, 56, juce::Justification::centredLeft);
     g.setColour (textBright);
-    g.drawText ("PLAY", textX + 87, 0, 70, 56, juce::Justification::centredLeft);
+    g.drawText ("PLAY", textX + firstWidth, 0, 90, 56, juce::Justification::centredLeft);
+
+    // Thin accent underline anchoring the brand row to the header band.
+    const int wordmarkEnd = textX + firstWidth
+                              + juce::GlyphArrangement::getStringWidthInt (wordmarkFont, "PLAY");
+    g.setColour (accent.withAlpha (0.7f));
+    g.fillRect (textX, 40, wordmarkEnd - textX, 2);
 
     // Device area panel behind the input/output/rate selectors.
     if (! deviceBarBounds.isEmpty())
@@ -350,10 +417,14 @@ void MainComponent::resized()
     header.removeFromRight (8);
     cableButton.setBounds (header.removeFromRight (124));
 
-    // Meter row: IN meter | FX kill switch | OUT meter.
+    // Meter row: IN meter | FX kill switch | OUT meter | LIMITER.
     auto meterRow = area.removeFromTop (40).reduced (16, 6);
-    const int killWidth = 84;
-    inputMeter.setBounds (meterRow.removeFromLeft ((meterRow.getWidth() - killWidth) / 2 - 8));
+    const int killWidth    = 84;
+    const int limiterWidth = 104;   // wider — holds "LIMITER OFF"
+    limiterButton.setBounds (meterRow.removeFromRight (limiterWidth));
+    meterRow.removeFromRight (8);
+    const int meterWidth = (meterRow.getWidth() - killWidth - 16) / 2;
+    inputMeter.setBounds (meterRow.removeFromLeft (meterWidth));
     meterRow.removeFromLeft (8);
     killButton.setBounds (meterRow.removeFromLeft (killWidth));
     meterRow.removeFromLeft (8);
@@ -362,14 +433,13 @@ void MainComponent::resized()
     // ── Device area (collapsible): input / output devices are always shown;
     //    expanding adds channel selection plus the driver / rate / buffer row.
     //    The expand/collapse toggle sits centred at the bottom. ─
-    deviceBarBounds = area.removeFromTop (audioExpanded ? 168 : 94);
+    deviceBarBounds = area.removeFromTop (audioExpanded ? 216 : 94);
     auto bar = deviceBarBounds.reduced (16, 10);
 
     audioToggleButton.setBounds (bar.removeFromBottom (24).withSizeKeepingCentre (170, 24));
     bar.removeFromBottom (10);   // gap between the content and the toggle
 
-    // Input | output columns; when expanded each device combo gets a compact
-    // channel-pair selector on its right.
+    // Input | output device columns.
     auto labelRow = bar.removeFromTop (14);
     auto comboRow = bar.removeFromTop (26);
     const int barHalf = labelRow.getWidth() / 2;
@@ -377,31 +447,30 @@ void MainComponent::resized()
     inputLabel .setBounds (labelRow.removeFromLeft (barHalf).withTrimmedRight (8));
     outputLabel.setBounds (labelRow);
 
-    auto inputCol  = comboRow.removeFromLeft (barHalf).withTrimmedRight (8);
-    auto outputCol = comboRow;
+    inputSelector .setBounds (comboRow.removeFromLeft (barHalf).withTrimmedRight (8));
+    outputSelector.setBounds (comboRow);
 
     if (audioExpanded)
     {
-        const int channelWidth = 74;
-        inputChannelSelector .setBounds (inputCol .removeFromRight (channelWidth));
-        outputChannelSelector.setBounds (outputCol.removeFromRight (channelWidth));
-        inputCol .removeFromRight (6);
-        outputCol.removeFromRight (6);
-    }
+        // Channel-pair selectors get their own row beneath the device combos.
+        bar.removeFromTop (10);
+        auto channelLabels = bar.removeFromTop (14);
+        auto channelCombos = bar.removeFromTop (26);
 
-    inputSelector .setBounds (inputCol);
-    outputSelector.setBounds (outputCol);
+        inputChannelLabel .setBounds (channelLabels.removeFromLeft (barHalf).withTrimmedRight (8));
+        outputChannelLabel.setBounds (channelLabels);
+        inputChannelSelector .setBounds (channelCombos.removeFromLeft (barHalf).withTrimmedRight (8));
+        outputChannelSelector.setBounds (channelCombos);
 
-    if (audioExpanded)
-    {
         bar.removeFromTop (12);
         auto settingsLabels = bar.removeFromTop (14);
         auto settingsCombos = bar.removeFromTop (26);
 
-        // TEST sits at the right end of the control row (plays a test tone).
-        testButton.setBounds (settingsCombos.removeFromRight (64));
+        // TEST OUTPUT sits at the right end of the control row (plays a test tone).
+        const int testWidth = 104;
+        testButton.setBounds (settingsCombos.removeFromRight (testWidth));
         settingsCombos.removeFromRight (14);
-        settingsLabels.removeFromRight (64 + 14);
+        settingsLabels.removeFromRight (testWidth + 14);
 
         auto placeColumn = [&] (juce::Label& label, juce::ComboBox& box, int width)
         {
@@ -426,14 +495,13 @@ void MainComponent::resized()
     auto toolbar = toolbarBounds.reduced (16, 8);
     scanButton.setBounds (toolbar.removeFromLeft (130));
     presetsButton.setBounds (toolbar.removeFromRight (110));
-    toolbar.removeFromRight (8);
-    limiterButton.setBounds (toolbar.removeFromRight (90));
     toolbar.removeFromLeft (12);
     toolbar.removeFromRight (12);
-    addPluginButton.setBounds (toolbar);   // fills the middle — the primary action
+    addPluginButton.setBounds (toolbar);   // fills the middle - the primary action
 
-    auto footer = area.removeFromBottom (26);
-    statusLabel.setBounds (footer.reduced (16, 0));
+    auto footer = area.removeFromBottom (26).reduced (16, 0);
+    cpuLabel.setBounds (footer.removeFromRight (90));
+    statusLabel.setBounds (footer);
 
     viewport.setBounds (area.reduced (12, 4));
     chainView.setSize (viewport.getMaximumVisibleWidth(), chainView.getIdealHeight());
@@ -475,25 +543,6 @@ void MainComponent::timerCallback()
     const float inR = engine.readInputPeak (1);
     inputMeter.pushLevels (inL, inR);
     outputMeter.pushLevels (engine.readOutputPeak (0), engine.readOutputPeak (1));
-
-    // Silence watchdog: if a running input has produced no signal for ~10 s, hint
-    // that the DJ software may not be routed to it. Only nag when an input device
-    // is actually selected.
-    const bool haveInput = engine.deviceManager.getCurrentAudioDevice() != nullptr
-                             && engine.deviceManager.getAudioDeviceSetup().inputDeviceName.isNotEmpty();
-
-    if (haveInput && juce::jmax (inL, inR) < 1.0e-5f)
-        ++silentTicks;
-    else
-        silentTicks = 0;
-
-    const bool nowSilent = haveInput && silentTicks >= 30 * 10;   // 10 s at 30 Hz
-
-    if (nowSilent != noInputSignal)
-    {
-        noInputSignal = nowSilent;
-        updateStatusText();
-    }
 
     if (++timerTicks % 30 == 0)
     {
@@ -1144,7 +1193,8 @@ void MainComponent::setAudioExpanded (bool shouldExpand)
     audioExpanded = shouldExpand;
     uiPrefs->setValue ("audioExpanded", audioExpanded);
 
-    juce::Component* expandedControls[] { &inputChannelSelector, &outputChannelSelector,
+    juce::Component* expandedControls[] { &inputChannelLabel, &outputChannelLabel,
+                                          &inputChannelSelector, &outputChannelSelector,
                                           &driverLabel, &deviceTypeSelector,
                                           &rateLabel, &bufferLabel,
                                           &sampleRateSelector, &bufferSizeSelector,
@@ -1179,6 +1229,10 @@ void MainComponent::updateKillButton()
 
     killButton.setButtonText (killed ? "FX OFF" : "FX ON");
     killButton.setToggleState (killed, juce::dontSendNotification);
+    killButton.setColour (juce::TextButton::textColourOffId, killed ? metricBad : accentBright);
+
+    // All effects bypassed is a loud, safety-relevant state — pulse a red ring.
+    killButton.setAlert (killed, metricBad);
 }
 
 void MainComponent::updateLimiterButton()
@@ -1186,26 +1240,21 @@ void MainComponent::updateLimiterButton()
     const auto on = engine.isLimiterEnabled();
 
     limiterButton.setButtonText (on ? "LIMITER" : "LIMITER OFF");
-    limiterButton.setToggleState (on, juce::dontSendNotification);
-    limiterButton.setColour (juce::TextButton::textColourOffId, on ? gridText : metricWarn);
+    // Toggle on == the alert (limiter off) state, so the normal state keeps the
+    // default gray background with orange text like the FX ON button.
+    limiterButton.setToggleState (! on, juce::dontSendNotification);
+    limiterButton.setColour (juce::TextButton::textColourOffId, on ? accentBright : metricWarn);
+
+    // The safety limiter being off is worth flagging, but less urgently than FX off.
+    limiterButton.setAlert (! on, metricWarn);
 }
 
 void MainComponent::updateStatusText()
 {
-    // A running input with no signal is the most common setup mistake — surface it
-    // ahead of the normal device readout.
-    if (noInputSignal && ! scanner.isScanning())
-    {
-        statusLabel.setColour (juce::Label::textColourId, metricWarn);
-        statusLabel.setText ("No input signal — check that your DJ software outputs to "
-                             + engine.deviceManager.getAudioDeviceSetup().inputDeviceName,
-                             juce::dontSendNotification);
-        return;
-    }
-
     statusLabel.setColour (juce::Label::textColourId, gridText);
 
     juce::String text;
+    juce::String cpuText;
 
     if (scanner.isScanning())
     {
@@ -1221,8 +1270,13 @@ void MainComponent::updateStatusText()
              << "  |  " << device->getName()
              << "  |  " << juce::String (device->getCurrentSampleRate() / 1000.0, 1) << " kHz"
              << "  |  " << device->getCurrentBufferSizeSamples() << " smp"
-             << "  |  out " << juce::String (latencyMs, 1) << " ms"
-             << "  |  CPU " << juce::String (engine.deviceManager.getCpuUsage() * 100.0, 0) << "%";
+             << "  |  out " << juce::String (latencyMs, 1) << " ms";
+
+        // CPU load in its own label so it can be tinted before dropouts become audible.
+        const auto cpu = engine.deviceManager.getCpuUsage() * 100.0;
+        cpuText = "CPU " + juce::String (cpu, 0) + "%";
+        cpuLabel.setColour (juce::Label::textColourId,
+                            cpu > 85.0 ? metricBad : (cpu > 60.0 ? metricWarn : gridText));
     }
     else
     {
@@ -1230,6 +1284,7 @@ void MainComponent::updateStatusText()
     }
 
     statusLabel.setText (text, juce::dontSendNotification);
+    cpuLabel.setText (cpuText, juce::dontSendNotification);
 }
 
 } // namespace play

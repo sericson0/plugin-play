@@ -35,8 +35,14 @@ public:
     /** Queried when a card refreshes so its FLOAT toggle reflects the real state. */
     std::function<bool (int slotIndex)> isFloating;
 
+    /** Invoked when the user clicks the empty-state placeholder ("add your first
+        plugin"). Wired by MainComponent to the same menu as the toolbar button. */
+    std::function<void()> onAddPlugin;
+
     void resized() override;
     void paint (juce::Graphics&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+    void mouseMove (const juce::MouseEvent&) override;
 
     static constexpr int cardHeight = 58;
     static constexpr int cardGap    = 8;
@@ -59,6 +65,9 @@ private:
     SlotCard* draggedCard = nullptr;
     int draggedStartY = 0;
     int dropTargetIndex = -1;
+
+    // Clickable placeholder shown when the chain is empty (see paint()).
+    juce::Rectangle<int> emptyStateBounds;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ChainView)
 };

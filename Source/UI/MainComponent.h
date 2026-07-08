@@ -14,10 +14,15 @@ namespace play
 //==============================================================================
 /** Stereo peak meter bar (two thin horizontal bars, colour-coded by level)
     with peak-hold ticks and a latching clip light (click the meter to reset). */
-class LevelMeter : public juce::Component
+class LevelMeter : public juce::Component,
+                   public juce::SettableTooltipClient
 {
 public:
-    explicit LevelMeter (const juce::String& labelText) : label (labelText) {}
+    explicit LevelMeter (const juce::String& labelText) : label (labelText)
+    {
+        setTooltip ("Peak level (green safe / amber hot / red near clip). "
+                    "Click to reset the clip indicator.");
+    }
 
     /** Feed the latest held peaks (linear gain); called from the UI timer. */
     void pushLevels (float left, float right);
@@ -31,6 +36,62 @@ private:
     float peakHold[2] { 0.0f, 0.0f };
     int   holdFrames[2] { 0, 0 };
     bool  clipped = false;
+    float clipGlowPhase = 0.0f;   // drives the pulsing glow behind a lit clip lamp
+};
+
+//==============================================================================
+/** A text button that pulses a coloured border to demand attention while in an
+    "alert" state (e.g. master FX bypassed, or the safety limiter switched off). */
+class AlertButton : public juce::TextButton,
+                    private juce::Timer
+{
+public:
+    explicit AlertButton (const juce::String& text) : juce::TextButton (text) {}
+
+    /** Turn the pulsing alert ring on or off, in the given colour. */
+    void setAlert (bool shouldAlert, juce::Colour colour)
+    {
+        alertColour = colour;
+
+        if (shouldAlert == alerting)
+        {
+            repaint();
+            return;
+        }
+
+        alerting = shouldAlert;
+
+        if (alerting)
+            startTimerHz (30);
+        else
+            stopTimer();
+
+        repaint();
+    }
+
+    void paintOverChildren (juce::Graphics& g) override
+    {
+        if (! alerting)
+            return;
+
+        // A pulsing ring drawn on top of the button's normal background.
+        const float glow = 0.45f + 0.55f * (0.5f + 0.5f * std::sin (phase));
+        auto bounds = getLocalBounds().toFloat().reduced (1.0f);
+
+        g.setColour (alertColour.withAlpha (glow));
+        g.drawRoundedRectangle (bounds, 5.0f, 2.0f);
+    }
+
+private:
+    void timerCallback() override
+    {
+        phase += 0.28f;
+        repaint();
+    }
+
+    bool alerting = false;
+    float phase = 0.0f;
+    juce::Colour alertColour { juce::Colours::red };
 };
 
 //==============================================================================
@@ -91,8 +152,8 @@ private:
     juce::TextButton cableButton      { "VIRTUAL CABLE" };
     juce::TextButton helpButton       { "HELP" };
     juce::TextButton presetsButton    { "PRESETS" };
-    juce::TextButton killButton       { "FX ON" };
-    juce::TextButton limiterButton    { "LIMITER" };
+    AlertButton      killButton       { "FX ON" };
+    AlertButton      limiterButton    { "LIMITER" };
     juce::TextButton addPluginButton  { "+  Add Plugin" };
     juce::TextButton audioToggleButton;
     LevelMeter inputMeter  { "IN" };
@@ -105,12 +166,14 @@ private:
     juce::Label      bufferLabel { {}, "BUFFER" };
     juce::ComboBox   inputSelector;
     juce::ComboBox   outputSelector;
+    juce::Label      inputChannelLabel  { {}, "INPUT PAIR" };
+    juce::Label      outputChannelLabel { {}, "OUTPUT PAIR" };
     juce::ComboBox   inputChannelSelector;
     juce::ComboBox   outputChannelSelector;
     juce::ComboBox   deviceTypeSelector;
     juce::ComboBox   sampleRateSelector;
     juce::ComboBox   bufferSizeSelector;
-    juce::TextButton testButton   { "TEST" };
+    juce::TextButton testButton   { "TEST OUTPUT" };
     juce::Label      rateHint;
     juce::Rectangle<int> deviceBarBounds;
     juce::Rectangle<int> toolbarBounds;
@@ -128,6 +191,7 @@ private:
     ChainView chainView { engine };
 
     juce::Label statusLabel;
+    juce::Label cpuLabel;   // right-aligned CPU readout, tinted amber/red under load
 
     std::map<juce::uint32, std::unique_ptr<PluginWindow>> pluginWindows;
 
@@ -140,10 +204,6 @@ private:
     std::unique_ptr<juce::FileChooser> scanFolderChooser;
 
     int timerTicks = 0;
-
-    // Silence watchdog: warn if a running input has been flat-zero for a while.
-    int  silentTicks   = 0;
-    bool noInputSignal = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };
