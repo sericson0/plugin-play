@@ -5,6 +5,9 @@
 namespace play
 {
 
+class MasterProcessor;
+class PluginNode;
+
 //==============================================================================
 /** One entry in the serial FX chain. */
 struct PluginSlotInfo
@@ -48,10 +51,21 @@ public:
     void setBypassed (int index, bool shouldBeBypassed);
     void clearChain();
 
-    /** Kill switch: bypasses every plugin at once without touching the
-        per-slot bypass flags, so disengaging restores the previous state. */
+    /** Kill switch: crossfades the whole chain to the dry input at the master
+        node, so the effects drop out (and come back) without a click. */
     void setMasterBypass (bool shouldBypass);
     bool isMasterBypassed() const noexcept          { return masterBypassed; }
+
+    /** Brickwall safety limiter on the output; on by default. Persisted with
+        the session. */
+    void setLimiterEnabled (bool shouldLimit);
+    bool isLimiterEnabled() const noexcept          { return limiterEnabled; }
+
+    //==============================================================================
+    /** Restores the most recently removed plugin (state and position intact).
+        Single level of undo. */
+    bool canUndoRemove() const noexcept             { return lastRemovedSlot != nullptr; }
+    void undoRemove();
 
     //==============================================================================
     /** Named chain presets, stored as XML files in the presets directory. */
@@ -61,6 +75,10 @@ public:
 
     /** Called just before a plugin node is destroyed, so the UI can close its window. */
     std::function<void (juce::AudioProcessorGraph::NodeID)> onPluginAboutToBeRemoved;
+
+    /** Called after a session/preset restore if any plugins failed to load, so
+        the UI can tell the user which ones went missing. */
+    std::function<void (const juce::StringArray& failedPlugins)> onRestoreErrors;
 
     //==============================================================================
     /** Peak level since last call (linear gain); reading resets the held peak. */
@@ -100,11 +118,17 @@ private:
         periodically so plugin parameter tweaks survive a crash. */
     void scheduleSave();
 
+    std::unique_ptr<juce::XmlElement> createSlotXml (int index) const;
     std::unique_ptr<juce::XmlElement> createChainXml() const;
 
     void rebuildConnections();
     void connectNodes (juce::AudioProcessorGraph::NodeID source, juce::AudioProcessorGraph::NodeID dest);
-    void restoreChainFromXml (std::shared_ptr<juce::XmlElement> chainXml, int slotIndex);
+    void restoreChainFromXml (std::shared_ptr<juce::XmlElement> chainXml, int slotIndex,
+                              std::shared_ptr<juce::StringArray> failures);
+    void insertPluginFromXml (std::unique_ptr<juce::XmlElement> slotXml, int index);
+
+    /** The bypass/limiter wrapper hosting the plugin at a slot, or nullptr. */
+    PluginNode* getPluginNode (int index) const;
 
     juce::File getSessionFile() const;
     double currentSampleRate() const;
@@ -114,7 +138,8 @@ private:
     juce::AudioProcessorPlayer player;
     MeterTap meterTap { player, *this };
 
-    juce::AudioProcessorGraph::NodeID inputNodeID, outputNodeID;
+    juce::AudioProcessorGraph::NodeID inputNodeID, outputNodeID, masterNodeID;
+    MasterProcessor* master = nullptr;
     std::vector<PluginSlotInfo> slots;
 
     std::atomic<float> inputPeaks[2]  { 0.0f, 0.0f };
@@ -122,7 +147,14 @@ private:
 
     bool restoringSession = false;
     bool masterBypassed = false;
+    bool limiterEnabled = true;
 
+    // One level of undo for plugin removal: the removed slot's serialized state
+    // and the index it was at.
+    std::unique_ptr<juce::XmlElement> lastRemovedSlot;
+    int lastRemovedIndex = 0;
+
+    JUCE_DECLARE_WEAK_REFERENCEABLE (AudioEngine)
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioEngine)
 };
 

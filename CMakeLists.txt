@@ -27,7 +27,7 @@ juce_generate_juce_header(PluginPlay)
 # ── Embedded resources (logo shown in the header) ────────────────────────────
 juce_add_binary_data(PluginPlayData
     SOURCES
-        Resources/exe_logo.png)
+        Resources/exe_logo_transparent.png)
 
 target_sources(PluginPlay
     PRIVATE
@@ -66,3 +66,10 @@ target_link_libraries(PluginPlay
 )
 
 target_include_directories(PluginPlay PRIVATE ${CMAKE_SOURCE_DIR}/Source)
+
+# Compile sources as UTF-8 so literal Unicode (bullets, ×, symbols, typographic
+# punctuation) is read correctly by MSVC instead of being mangled to the system
+# code page. Both flags are needed: /utf-8 sets the source and execution charset.
+if (MSVC)
+    target_compile_options(PluginPlay PRIVATE /utf-8)
+endif()

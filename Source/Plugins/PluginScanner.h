@@ -27,17 +27,28 @@ public:
 
     juce::String getProgressText() const;
 
+    //==============================================================================
+    /** Extra folders to scan on top of the OS's default VST3 locations, for
+        plugins kept in non-standard places. Persisted in the properties file. */
+    juce::StringArray getUserScanPaths() const;
+    void addUserScanPath (const juce::File&);
+    void removeUserScanPath (const juce::String& path);
+
     juce::KnownPluginList knownPlugins;
 
 private:
     void run() override;
     void saveList();
+    void loadUserScanPaths();
 
     juce::AudioPluginFormatManager& formatManager;
     juce::PropertiesFile& properties;
 
     mutable juce::CriticalSection progressLock;
     juce::String progressText;
+
+    mutable juce::CriticalSection pathLock;
+    juce::StringArray userScanPaths;
 
     JUCE_DECLARE_WEAK_REFERENCEABLE (PluginScanner)
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginScanner)

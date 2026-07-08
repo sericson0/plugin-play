@@ -7,7 +7,8 @@ namespace play
 using namespace play::Colours;
 
 //==============================================================================
-class ChainView::SlotCard : public juce::Component
+class ChainView::SlotCard : public juce::Component,
+                            public juce::SettableTooltipClient
 {
 public:
     SlotCard (ChainView& ownerView, int slotIndex)
@@ -20,16 +21,32 @@ public:
             owner.engine.setBypassed (index, nowBypassed);
         };
 
-        editButton.onClick = [this]
+        openButton.onClick = [this]
         {
             if (owner.onOpenEditor != nullptr)
                 owner.onOpenEditor (index);
         };
 
+        floatButton.setClickingTogglesState (true);
+        floatButton.setColour (juce::TextButton::buttonOnColourId, buttonSelected);
+        floatButton.onClick = [this]
+        {
+            if (owner.onFloatEditor != nullptr)
+                owner.onFloatEditor (index, floatButton.getToggleState());
+        };
+
         removeButton.onClick = [this] { owner.engine.removePlugin (index); };
 
+        bypassButton.setTooltip ("Toggle this effect on or off (bypass)");
+        openButton  .setTooltip ("Open this plugin's editor window");
+        floatButton .setTooltip ("Pin this plugin's editor on top of other windows — "
+                                 "keep it visible over your DJ software. Does not open the editor.");
+        removeButton.setTooltip ("Remove this plugin from the chain");
+        setTooltip ("Drag to reorder — double-click to open the editor");
+
         addAndMakeVisible (bypassButton);
-        addAndMakeVisible (editButton);
+        addAndMakeVisible (openButton);
+        addAndMakeVisible (floatButton);
         addAndMakeVisible (removeButton);
 
         setMouseCursor (juce::MouseCursor::DraggingHandCursor);
@@ -46,6 +63,10 @@ public:
         bypassButton.setButtonText (slot.bypassed ? "OFF" : "ON");
         bypassButton.setColour (juce::TextButton::textColourOffId,
                                 slot.bypassed ? inactive : textNormal);
+
+        if (owner.isFloating != nullptr)
+            floatButton.setToggleState (owner.isFloating (index), juce::dontSendNotification);
+
         repaint();
     }
 
@@ -103,7 +124,9 @@ public:
 
         removeButton.setBounds (strip.removeFromRight (28).withSizeKeepingCentre (26, 26));
         strip.removeFromRight (6);
-        editButton.setBounds (strip.removeFromRight (52).withSizeKeepingCentre (52, 26));
+        floatButton.setBounds (strip.removeFromRight (54).withSizeKeepingCentre (54, 26));
+        strip.removeFromRight (6);
+        openButton.setBounds (strip.removeFromRight (54).withSizeKeepingCentre (54, 26));
         strip.removeFromRight (6);
         bypassButton.setBounds (strip.removeFromRight (44).withSizeKeepingCentre (44, 26));
     }
@@ -142,13 +165,14 @@ public:
     bool dragging = false;
 
 private:
-    static int buttonStripWidth() { return 44 + 6 + 52 + 6 + 28; }
+    static int buttonStripWidth() { return 44 + 6 + 54 + 6 + 54 + 6 + 28; }
 
     ChainView& owner;
     int index;
 
     juce::TextButton bypassButton { "ON" };
-    juce::TextButton editButton   { "EDIT" };
+    juce::TextButton openButton   { "OPEN" };
+    juce::TextButton floatButton  { "FLOAT" };
     juce::TextButton removeButton { juce::String::fromUTF8 ("\xc3\x97") }; // ×
 };
 
@@ -156,15 +180,6 @@ private:
 ChainView::ChainView (AudioEngine& engineToUse)
     : engine (engineToUse)
 {
-    addButton.setColour (juce::TextButton::buttonColourId, background.brighter (0.03f));
-    addButton.setColour (juce::TextButton::textColourOffId, accentBright);
-    addButton.onClick = [this]
-    {
-        if (onAddClicked != nullptr)
-            onAddClicked (addButton.getScreenPosition());
-    };
-    addAndMakeVisible (addButton);
-
     refresh();
 }
 
@@ -191,7 +206,12 @@ void ChainView::refresh()
 
 int ChainView::getIdealHeight() const
 {
-    return (engine.getNumPlugins() + 1) * (cardHeight + cardGap) + cardGap + 40;
+    const int count = engine.getNumPlugins();
+
+    if (count == 0)
+        return cardGap + 44 + cardGap;   // room for the empty-state hint
+
+    return count * (cardHeight + cardGap) + cardGap;
 }
 
 void ChainView::resized()
@@ -202,7 +222,6 @@ void ChainView::resized()
 void ChainView::layoutCards (bool animate)
 {
     auto width = juce::jmax (0, getWidth());
-    int y = cardGap;
 
     auto place = [this, animate] (juce::Component* comp, juce::Rectangle<int> target)
     {
@@ -240,16 +259,7 @@ void ChainView::layoutCards (bool animate)
 
         place (cards[i], { 0, cardGap + visualIndex * (cardHeight + cardGap),
                            width, cardHeight });
-        y = juce::jmax (y, cardGap + (visualIndex + 1) * (cardHeight + cardGap));
     }
-
-    if (draggedCard != nullptr)
-        y = juce::jmax (y, cardGap + cards.size() * (cardHeight + cardGap));
-
-    if (cards.isEmpty())
-        y = cardGap + 44;   // room for the empty-state hint
-
-    place (&addButton, { 0, y, width, cardHeight - 14 });
 }
 
 void ChainView::paint (juce::Graphics& g)

@@ -1,4 +1,6 @@
 #include "AudioEngine.h"
+#include "MasterProcessor.h"
+#include "PluginNode.h"
 
 namespace play
 {
@@ -48,6 +50,13 @@ AudioEngine::AudioEngine()
     inputNodeID  = inNode->nodeID;
     outputNodeID = outNode->nodeID;
 
+    // The master node (limiter + clickless bypass crossfade) always sits between
+    // the last plugin and the output.
+    auto masterProcessor = std::make_unique<MasterProcessor>();
+    master = masterProcessor.get();
+    masterNodeID = graph.addNode (std::move (masterProcessor))->nodeID;
+    master->setLimiterEnabled (limiterEnabled);
+
     player.setProcessor (&graph);
     deviceManager.addAudioCallback (&meterTap);
     deviceManager.addChangeListener (this);
@@ -67,10 +76,23 @@ AudioEngine::~AudioEngine()
 }
 
 //==============================================================================
+PluginNode* AudioEngine::getPluginNode (int index) const
+{
+    if (! juce::isPositiveAndBelow (index, (int) slots.size()))
+        return nullptr;
+
+    if (auto* node = graph.getNodeForId (slots[(size_t) index].nodeID))
+        return dynamic_cast<PluginNode*> (node->getProcessor());
+
+    return nullptr;
+}
+
 juce::AudioProcessor* AudioEngine::getProcessor (int index) const
 {
-    if (auto* node = graph.getNodeForId (slots[(size_t) index].nodeID))
-        return node->getProcessor();
+    // Callers (editor windows, state save) want the actual plugin, not the
+    // bypass/limiter wrapper that hosts it in the graph.
+    if (auto* wrapper = getPluginNode (index))
+        return &wrapper->getInner();
 
     return nullptr;
 }
@@ -79,8 +101,14 @@ void AudioEngine::addPlugin (const juce::PluginDescription& description,
                              std::function<void (const juce::String&)> onDone)
 {
     formatManager.createPluginInstanceAsync (description, currentSampleRate(), currentBlockSize(),
-        [this, description, onDone] (std::unique_ptr<juce::AudioPluginInstance> instance, const juce::String& error)
+        [safeThis = juce::WeakReference<AudioEngine> (this), description, onDone]
+        (std::unique_ptr<juce::AudioPluginInstance> instance, const juce::String& error)
         {
+            if (safeThis == nullptr)
+                return;
+
+            auto& self = *safeThis;
+
             if (instance == nullptr)
             {
                 if (onDone != nullptr)
@@ -89,13 +117,14 @@ void AudioEngine::addPlugin (const juce::PluginDescription& description,
             }
 
             instance->enableAllBuses();
-            auto node = graph.addNode (std::move (instance));
-            node->setBypassed (masterBypassed);
-            slots.push_back ({ node->nodeID, description, false });
+            auto wrapper = std::make_unique<PluginNode> (std::move (instance));
+            wrapper->setMasterBypass (self.masterBypassed);
+            auto node = self.graph.addNode (std::move (wrapper));
+            self.slots.push_back ({ node->nodeID, description, false });
 
-            rebuildConnections();
-            scheduleSave();
-            sendChangeMessage();
+            self.rebuildConnections();
+            self.scheduleSave();
+            self.sendChangeMessage();
 
             if (onDone != nullptr)
                 onDone ({});
@@ -109,6 +138,10 @@ void AudioEngine::removePlugin (int index)
 
     auto nodeID = slots[(size_t) index].nodeID;
 
+    // Stash the removed slot (state + position) so the removal can be undone.
+    lastRemovedSlot  = createSlotXml (index);
+    lastRemovedIndex = index;
+
     if (onPluginAboutToBeRemoved != nullptr)
         onPluginAboutToBeRemoved (nodeID);
 
@@ -120,10 +153,23 @@ void AudioEngine::removePlugin (int index)
     sendChangeMessage();
 }
 
+void AudioEngine::undoRemove()
+{
+    if (lastRemovedSlot == nullptr)
+        return;
+
+    auto slotXml = std::move (lastRemovedSlot);   // consume: single level of undo
+    insertPluginFromXml (std::move (slotXml), lastRemovedIndex);
+}
+
 void AudioEngine::clearChain()
 {
     while (! slots.empty())
         removePlugin ((int) slots.size() - 1);
+
+    // A bulk clear (e.g. loading a preset) shouldn't leave a stray "undo" that
+    // would resurrect a plugin from the old chain.
+    lastRemovedSlot = nullptr;
 }
 
 void AudioEngine::movePlugin (int fromIndex, int toIndex)
@@ -149,8 +195,10 @@ void AudioEngine::setBypassed (int index, bool shouldBeBypassed)
 
     slots[(size_t) index].bypassed = shouldBeBypassed;
 
-    if (auto* node = graph.getNodeForId (slots[(size_t) index].nodeID))
-        node->setBypassed (masterBypassed || shouldBeBypassed);
+    // The wrapper crossfades wet<->dry (latency-compensated), so toggling a
+    // plugin never clicks, even a high-latency one.
+    if (auto* wrapper = getPluginNode (index))
+        wrapper->setUserBypass (shouldBeBypassed);
 
     scheduleSave();
     sendChangeMessage();
@@ -163,10 +211,27 @@ void AudioEngine::setMasterBypass (bool shouldBypass)
 
     masterBypassed = shouldBypass;
 
-    for (auto& slot : slots)
-        if (auto* node = graph.getNodeForId (slot.nodeID))
-            node->setBypassed (masterBypassed || slot.bypassed);
+    // Master kill engages every wrapper's bypass at once; each crossfades to its
+    // latency-aligned dry, so the whole chain drops out (and returns) seamlessly
+    // without disturbing the per-slot bypass flags.
+    for (int i = 0; i < (int) slots.size(); ++i)
+        if (auto* wrapper = getPluginNode (i))
+            wrapper->setMasterBypass (masterBypassed);
 
+    sendChangeMessage();
+}
+
+void AudioEngine::setLimiterEnabled (bool shouldLimit)
+{
+    if (limiterEnabled == shouldLimit)
+        return;
+
+    limiterEnabled = shouldLimit;
+
+    if (master != nullptr)
+        master->setLimiterEnabled (limiterEnabled);
+
+    scheduleSave();
     sendChangeMessage();
 }
 
@@ -215,6 +280,8 @@ void AudioEngine::rebuildConnections()
     for (auto& connection : graph.getConnections())
         graph.removeConnection (connection);
 
+    // Plain serial chain; the master (limiter) node sits just before the output.
+    // Each plugin wrapper handles its own clickless, latency-aligned bypass.
     auto previous = inputNodeID;
 
     for (auto& slot : slots)
@@ -223,7 +290,8 @@ void AudioEngine::rebuildConnections()
         previous = slot.nodeID;
     }
 
-    connectNodes (previous, outputNodeID);
+    connectNodes (previous, masterNodeID);
+    connectNodes (masterNodeID, outputNodeID);
 }
 
 //==============================================================================
@@ -251,25 +319,30 @@ juce::File AudioEngine::getSessionFile() const
 }
 
 //==============================================================================
+std::unique_ptr<juce::XmlElement> AudioEngine::createSlotXml (int index) const
+{
+    auto slotXml = std::make_unique<juce::XmlElement> ("SLOT");
+    slotXml->setAttribute ("bypassed", slots[(size_t) index].bypassed);
+
+    if (auto descriptionXml = slots[(size_t) index].description.createXml())
+        slotXml->addChildElement (descriptionXml.release());
+
+    if (auto* processor = getProcessor (index))
+    {
+        juce::MemoryBlock state;
+        processor->getStateInformation (state);
+        slotXml->setAttribute ("state", state.toBase64Encoding());
+    }
+
+    return slotXml;
+}
+
 std::unique_ptr<juce::XmlElement> AudioEngine::createChainXml() const
 {
     auto chain = std::make_unique<juce::XmlElement> ("CHAIN");
 
     for (size_t i = 0; i < slots.size(); ++i)
-    {
-        auto* slotXml = chain->createNewChildElement ("SLOT");
-        slotXml->setAttribute ("bypassed", slots[i].bypassed);
-
-        if (auto descriptionXml = slots[i].description.createXml())
-            slotXml->addChildElement (descriptionXml.release());
-
-        if (auto* processor = getProcessor ((int) i))
-        {
-            juce::MemoryBlock state;
-            processor->getStateInformation (state);
-            slotXml->setAttribute ("state", state.toBase64Encoding());
-        }
-    }
+        chain->addChildElement (createSlotXml ((int) i).release());
 
     return chain;
 }
@@ -280,6 +353,8 @@ void AudioEngine::saveSession()
         return;
 
     juce::XmlElement session ("SESSION");
+    session.setAttribute ("version", 1);
+    session.setAttribute ("limiter", limiterEnabled);
 
     auto* devices = session.createNewChildElement ("DEVICES");
     if (auto deviceState = deviceManager.createStateXml())
@@ -316,7 +391,8 @@ bool AudioEngine::loadPreset (const juce::File& presetFile)
     if (xml->getNumChildElements() > 0)
     {
         restoringSession = true;
-        restoreChainFromXml (std::shared_ptr<juce::XmlElement> (xml.release()), 0);
+        restoreChainFromXml (std::shared_ptr<juce::XmlElement> (xml.release()), 0,
+                             std::make_shared<juce::StringArray>());
     }
 
     return true;
@@ -331,8 +407,14 @@ void AudioEngine::loadSession()
 
     const juce::XmlElement* deviceState = nullptr;
     if (session != nullptr)
+    {
+        limiterEnabled = session->getBoolAttribute ("limiter", true);
+        if (master != nullptr)
+            master->setLimiterEnabled (limiterEnabled);
+
         if (auto* devices = session->getChildByName ("DEVICES"))
             deviceState = devices->getFirstChildElement();
+    }
 
     deviceManager.initialise (2, 2, deviceState, true);
     rebuildConnections();
@@ -345,7 +427,7 @@ void AudioEngine::loadSession()
             {
                 restoringSession = true;
                 auto chainCopy = std::make_shared<juce::XmlElement> (*chain);
-                restoreChainFromXml (chainCopy, 0);
+                restoreChainFromXml (chainCopy, 0, std::make_shared<juce::StringArray>());
                 return;
             }
         }
@@ -354,7 +436,8 @@ void AudioEngine::loadSession()
     sendChangeMessage();
 }
 
-void AudioEngine::restoreChainFromXml (std::shared_ptr<juce::XmlElement> chainXml, int slotIndex)
+void AudioEngine::restoreChainFromXml (std::shared_ptr<juce::XmlElement> chainXml, int slotIndex,
+                                       std::shared_ptr<juce::StringArray> failures)
 {
     if (slotIndex >= chainXml->getNumChildElements())
     {
@@ -362,6 +445,10 @@ void AudioEngine::restoreChainFromXml (std::shared_ptr<juce::XmlElement> chainXm
         rebuildConnections();
         saveSession();
         sendChangeMessage();
+
+        if (failures != nullptr && ! failures->isEmpty() && onRestoreErrors != nullptr)
+            onRestoreErrors (*failures);
+
         return;
     }
 
@@ -372,7 +459,12 @@ void AudioEngine::restoreChainFromXml (std::shared_ptr<juce::XmlElement> chainXm
 
     if (descriptionXml == nullptr || ! description.loadFromXml (*descriptionXml))
     {
-        restoreChainFromXml (chainXml, slotIndex + 1);
+        if (failures != nullptr)
+            failures->add (descriptionXml != nullptr
+                               ? descriptionXml->getStringAttribute ("name", "Unknown plugin")
+                               : "Unknown plugin");
+
+        restoreChainFromXml (chainXml, slotIndex + 1, failures);
         return;
     }
 
@@ -380,9 +472,14 @@ void AudioEngine::restoreChainFromXml (std::shared_ptr<juce::XmlElement> chainXm
     const auto stateBase64 = slotXml->getStringAttribute ("state");
 
     formatManager.createPluginInstanceAsync (description, currentSampleRate(), currentBlockSize(),
-        [this, chainXml, slotIndex, description, bypassed, stateBase64]
+        [safeThis = juce::WeakReference<AudioEngine> (this), chainXml, slotIndex, description, bypassed, stateBase64, failures]
         (std::unique_ptr<juce::AudioPluginInstance> instance, const juce::String&)
         {
+            if (safeThis == nullptr)
+                return;
+
+            auto& self = *safeThis;
+
             if (instance != nullptr)
             {
                 instance->enableAllBuses();
@@ -391,15 +488,64 @@ void AudioEngine::restoreChainFromXml (std::shared_ptr<juce::XmlElement> chainXm
                 if (state.fromBase64Encoding (stateBase64) && state.getSize() > 0)
                     instance->setStateInformation (state.getData(), (int) state.getSize());
 
-                auto node = graph.addNode (std::move (instance));
-                node->setBypassed (masterBypassed || bypassed);
-                slots.push_back ({ node->nodeID, description, bypassed });
+                auto wrapper = std::make_unique<PluginNode> (std::move (instance));
+                wrapper->setMasterBypass (self.masterBypassed);
+                wrapper->setUserBypass (bypassed);
+                auto node = self.graph.addNode (std::move (wrapper));
+                self.slots.push_back ({ node->nodeID, description, bypassed });
 
-                rebuildConnections();
-                sendChangeMessage();
+                self.rebuildConnections();
+                self.sendChangeMessage();
+            }
+            else if (failures != nullptr)
+            {
+                failures->add (description.name);
             }
 
-            restoreChainFromXml (chainXml, slotIndex + 1);
+            self.restoreChainFromXml (chainXml, slotIndex + 1, failures);
+        });
+}
+
+void AudioEngine::insertPluginFromXml (std::unique_ptr<juce::XmlElement> slotXml, int index)
+{
+    if (slotXml == nullptr)
+        return;
+
+    auto* descriptionXml = slotXml->getChildByName ("PLUGIN");
+
+    juce::PluginDescription description;
+    if (descriptionXml == nullptr || ! description.loadFromXml (*descriptionXml))
+        return;
+
+    const auto bypassed    = slotXml->getBoolAttribute ("bypassed");
+    const auto stateBase64 = slotXml->getStringAttribute ("state");
+
+    formatManager.createPluginInstanceAsync (description, currentSampleRate(), currentBlockSize(),
+        [safeThis = juce::WeakReference<AudioEngine> (this), index, description, bypassed, stateBase64]
+        (std::unique_ptr<juce::AudioPluginInstance> instance, const juce::String&)
+        {
+            if (safeThis == nullptr || instance == nullptr)
+                return;
+
+            auto& self = *safeThis;
+
+            instance->enableAllBuses();
+
+            juce::MemoryBlock state;
+            if (state.fromBase64Encoding (stateBase64) && state.getSize() > 0)
+                instance->setStateInformation (state.getData(), (int) state.getSize());
+
+            auto wrapper = std::make_unique<PluginNode> (std::move (instance));
+            wrapper->setMasterBypass (self.masterBypassed);
+            wrapper->setUserBypass (bypassed);
+            auto node = self.graph.addNode (std::move (wrapper));
+
+            const auto at = (size_t) juce::jlimit (0, (int) self.slots.size(), index);
+            self.slots.insert (self.slots.begin() + (long) at, { node->nodeID, description, bypassed });
+
+            self.rebuildConnections();
+            self.scheduleSave();
+            self.sendChangeMessage();
         });
 }
 

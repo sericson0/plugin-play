@@ -8,8 +8,9 @@ namespace play
 
 //==============================================================================
 /**
-    The vertical list of plugin slot cards plus the "+ Add Plugin" button.
-    Cards can be dragged to reorder; each has bypass / edit / remove controls.
+    The vertical list of plugin slot cards. Cards can be dragged to reorder;
+    each has bypass / open / float / remove controls. The "Add Plugin" action
+    lives in the toolbar above this view (owned by MainComponent).
 */
 class ChainView : public juce::Component
 {
@@ -24,8 +25,15 @@ public:
     /** Height needed to show all cards; the parent viewport uses this. */
     int getIdealHeight() const;
 
-    std::function<void (juce::Point<int> screenPosition)> onAddClicked;
     std::function<void (int slotIndex)> onOpenEditor;
+
+    /** Toggle whether the plugin's editor is pinned always-on-top, so it stays
+        visible over other apps (e.g. the user's DJ software). This never opens
+        the editor — it only affects a window that is already (or later) open. */
+    std::function<void (int slotIndex, bool shouldFloat)> onFloatEditor;
+
+    /** Queried when a card refreshes so its FLOAT toggle reflects the real state. */
+    std::function<bool (int slotIndex)> isFloating;
 
     void resized() override;
     void paint (juce::Graphics&) override;
@@ -46,7 +54,6 @@ private:
 
     AudioEngine& engine;
     juce::OwnedArray<SlotCard> cards;
-    juce::TextButton addButton { "+  Add Plugin" };
     juce::ComponentAnimator animator;
 
     SlotCard* draggedCard = nullptr;

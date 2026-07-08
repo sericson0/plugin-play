@@ -19,6 +19,8 @@ PluginScanner::PluginScanner (juce::AudioPluginFormatManager& fm, juce::Properti
     if (auto savedList = properties.getXmlValue ("knownPlugins"))
         knownPlugins.recreateFromXml (*savedList);
 
+    loadUserScanPaths();
+
     juce::PluginDirectoryScanner::applyBlacklistingsFromDeadMansPedal (knownPlugins,
                                                                        getDeadMansPedalFile());
 }
@@ -40,6 +42,46 @@ juce::String PluginScanner::getProgressText() const
     return progressText;
 }
 
+//==============================================================================
+void PluginScanner::loadUserScanPaths()
+{
+    const juce::ScopedLock lock (pathLock);
+    userScanPaths.clear();
+    userScanPaths.addTokens (properties.getValue ("customScanPaths"), "\n", "");
+    userScanPaths.removeEmptyStrings();
+}
+
+juce::StringArray PluginScanner::getUserScanPaths() const
+{
+    const juce::ScopedLock lock (pathLock);
+    return userScanPaths;
+}
+
+void PluginScanner::addUserScanPath (const juce::File& folder)
+{
+    if (! folder.isDirectory())
+        return;
+
+    {
+        const juce::ScopedLock lock (pathLock);
+        userScanPaths.addIfNotAlreadyThere (folder.getFullPathName());
+    }
+
+    properties.setValue ("customScanPaths", getUserScanPaths().joinIntoString ("\n"));
+    properties.saveIfNeeded();
+}
+
+void PluginScanner::removeUserScanPath (const juce::String& path)
+{
+    {
+        const juce::ScopedLock lock (pathLock);
+        userScanPaths.removeString (path);
+    }
+
+    properties.setValue ("customScanPaths", getUserScanPaths().joinIntoString ("\n"));
+    properties.saveIfNeeded();
+}
+
 void PluginScanner::run()
 {
     juce::AudioPluginFormat* vst3Format = nullptr;
@@ -54,8 +96,13 @@ void PluginScanner::run()
     auto pedalFile = getDeadMansPedalFile();
     pedalFile.getParentDirectory().createDirectory();
 
+    // Default OS locations plus any user-added folders.
+    auto searchPaths = vst3Format->getDefaultLocationsToSearch();
+    for (const auto& path : getUserScanPaths())
+        searchPaths.addIfNotAlreadyThere (juce::File (path));
+
     juce::PluginDirectoryScanner scanner (knownPlugins, *vst3Format,
-                                          vst3Format->getDefaultLocationsToSearch(),
+                                          searchPaths,
                                           true, pedalFile, true);
 
     juce::String currentName;
