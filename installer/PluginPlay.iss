@@ -116,9 +116,18 @@ end;
 // Our installer already runs elevated, so the child install inherits elevation.
 procedure CurStepChanged(CurStep: TSetupStep);
 var
-  ZipPath, ExtractDir, SetupExe, PsArgs: String;
+  ZipPath, ExtractDir, SetupExe, PsArgs, AppData: String;
   ResultCode: Integer;
 begin
+  if CurStep = ssPostInstall then
+  begin
+    // Drop a marker so the app re-shows its first-run walkthrough once after this
+    // install/upgrade. The app deletes it after showing.
+    AppData := ExpandConstant('{userappdata}\PluginPlay');
+    ForceDirectories(AppData);
+    SaveStringToFile(AppData + '\.show-welcome', '', False);
+  end;
+
   if (CurStep = ssPostInstall) and WizardIsTaskSelected('vbcable') then
   begin
     ZipPath    := ExpandConstant('{tmp}\VBCABLE_Driver_Pack.zip');

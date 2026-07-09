@@ -115,6 +115,7 @@ private:
     void showScanMenu();
     void addScanFolder();
     void showHelp();
+    void maybeShowFirstRunGuide();   // first launch (or after reinstall)
     void showPresetsMenu();
     void promptSavePreset();
     void savePresetTo (const juce::File&);
@@ -157,6 +158,8 @@ private:
 
     juce::TextButton scanButton       { "SCAN PLUGINS" };
     juce::TextButton cableButton      { "VIRTUAL CABLE" };
+    juce::TextButton guideButton      { "GUIDE" };
+    juce::TextButton donateButton     { "DONATE" };
     juce::TextButton helpButton       { "HELP" };
     juce::TextButton presetsButton    { "PRESETS" };
     AlertButton      killButton       { "FX ON" };
@@ -200,6 +203,10 @@ private:
     // two id ranges can't collide.
     static constexpr int captureItemBase = 10000;
     std::vector<AudioSource> captureSources;
+
+    // Synthetic driver-dropdown item that enables ASIO on demand (ASIO isn't scanned
+    // at startup because a flaky driver can hang the scan). Well above real type ids.
+    static constexpr int asioEnableItemId = 9000;
 
     juce::Viewport viewport;
     ChainView chainView { engine };

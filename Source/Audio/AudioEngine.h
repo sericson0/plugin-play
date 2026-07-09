@@ -65,6 +65,15 @@ public:
     bool isLimiterEnabled() const noexcept          { return limiterEnabled; }
 
     //==============================================================================
+    /** ASIO device enumeration is DEFERRED on Windows: some third-party ASIO drivers
+        block scanForDevices() on the message thread when their hardware is absent,
+        which would freeze the whole app during startup. Only WASAPI/DirectSound are
+        registered up front; ASIO is added — and scanned — on demand the first time the
+        user picks it. Returns true if ASIO is available (and now selected) afterwards. */
+    bool ensureAsioEnabled();
+    bool isAsioEnabled() const noexcept             { return asioEnabled; }
+
+    //==============================================================================
     /** Running apps that can be picked as an input source (one entry per app). */
     std::vector<AudioSource> availableCaptureSources() const { return enumerateAudioSources(); }
 
@@ -173,6 +182,13 @@ private:
     juce::File getSessionFile() const;
     double currentSampleRate() const;
     int currentBlockSize() const;
+
+    /** Registers the device types that are safe to scan on the message thread at
+        startup (WASAPI + DirectSound). Called before the device manager is initialised
+        so JUCE doesn't add + scan its full default set (which includes the hang-prone
+        ASIO). No-op off Windows (JUCE's defaults are used there). */
+    void registerSafeDeviceTypes();
+    bool asioEnabled = false;
 
     juce::AudioProcessorGraph graph;
     juce::AudioProcessorPlayer player;

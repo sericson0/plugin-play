@@ -84,6 +84,10 @@ AudioEngine::AudioEngine()
 {
     juce::addDefaultFormatsToManager (formatManager);
 
+    // Register the safe device types BEFORE anything initialises the manager, so JUCE
+    // skips its default set (which eagerly scans ASIO and can hang on a flaky driver).
+    registerSafeDeviceTypes();
+
     auto inNode  = graph.addNode (std::make_unique<IONode> (IONode::audioInputNode));
     auto outNode = graph.addNode (std::make_unique<IONode> (IONode::audioOutputNode));
     inputNodeID  = inNode->nodeID;
@@ -288,6 +292,51 @@ void AudioEngine::setMasterBypass (bool shouldBypass)
             wrapper->setMasterBypass (masterBypassed);
 
     sendChangeMessage();
+}
+
+void AudioEngine::registerSafeDeviceTypes()
+{
+   #if JUCE_WINDOWS
+    // Mirror JUCE's default Windows set MINUS ASIO. Adding any type up front stops
+    // createDeviceTypesIfNeeded() from adding + scanning the full default list.
+    using Type = juce::AudioIODeviceType;
+    deviceManager.addAudioDeviceType (std::unique_ptr<Type> (Type::createAudioIODeviceType_WASAPI (juce::WASAPIDeviceMode::shared)));
+    deviceManager.addAudioDeviceType (std::unique_ptr<Type> (Type::createAudioIODeviceType_WASAPI (juce::WASAPIDeviceMode::exclusive)));
+    deviceManager.addAudioDeviceType (std::unique_ptr<Type> (Type::createAudioIODeviceType_WASAPI (juce::WASAPIDeviceMode::sharedLowLatency)));
+    deviceManager.addAudioDeviceType (std::unique_ptr<Type> (Type::createAudioIODeviceType_DirectSound()));
+   #endif
+}
+
+bool AudioEngine::ensureAsioEnabled()
+{
+   #if JUCE_WINDOWS
+    if (! asioEnabled)
+    {
+        std::unique_ptr<juce::AudioIODeviceType> asio (juce::AudioIODeviceType::createAudioIODeviceType_ASIO());
+        if (asio == nullptr)
+            return false;
+
+        deviceManager.addAudioDeviceType (std::move (asio));
+        asioEnabled = true;
+
+        // Scan ASIO now — user-initiated, so a slow/blocking driver only affects this
+        // explicit action, never startup. (The type was just added, so getAvailable-
+        // DeviceTypes returns it without triggering a full rescan of the others.)
+        for (auto* type : deviceManager.getAvailableDeviceTypes())
+            if (type->getTypeName() == "ASIO")
+            {
+                type->scanForDevices();
+                break;
+            }
+    }
+
+    deviceManager.setCurrentAudioDeviceType ("ASIO", true);
+    scheduleSave();
+    sendChangeMessage();
+    return true;
+   #else
+    return false;
+   #endif
 }
 
 void AudioEngine::setLimiterEnabled (bool shouldLimit)

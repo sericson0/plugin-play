@@ -47,6 +47,19 @@ public:
 
     void systemRequestedQuit() override { quit(); }
 
+    // Single-instance app: when the user launches it again (e.g. double-clicks the
+    // icon while it's already running), bring the existing window forward instead of
+    // silently doing nothing — otherwise it reads as "the app won't open".
+    void anotherInstanceStarted (const juce::String&) override
+    {
+        if (mainWindow != nullptr)
+        {
+            mainWindow->setMinimised (false);
+            mainWindow->setVisible (true);
+            mainWindow->toFront (true);
+        }
+    }
+
 private:
     //==============================================================================
     class MainWindow : public juce::DocumentWindow
@@ -64,15 +77,41 @@ private:
             setResizeLimits (700, 560, 10000, 10000);
 
             // Restore the last window position/size if we have one; otherwise centre
-            // at the content's default size.
+            // at the content's default size. Guard against a saved position on a
+            // monitor that's no longer connected (a DJ undocking a laptop): if the
+            // window wouldn't land somewhere its title bar can be grabbed, re-centre.
             const auto state = settings.getValue ("windowState");
             if (state.isNotEmpty())
+            {
                 restoreWindowStateFromString (state);
+
+                if (! isTitleBarReachable())
+                    centreWithSize (getWidth(), getHeight());
+            }
             else
+            {
                 centreWithSize (getWidth(), getHeight());
+            }
 
             setVisible (true);
             play::applyDarkTitleBar (*this);
+        }
+
+        /** True if a grabbable strip of the window's title bar lands on a connected
+            display — i.e. the window isn't stranded off-screen (disconnected monitor,
+            or dragged above the top of the screen). */
+        bool isTitleBarReachable() const
+        {
+            const auto bounds = getBounds();
+            const juce::Rectangle<int> titleStrip (bounds.getX(), bounds.getY(),
+                                                   bounds.getWidth(),
+                                                   juce::jmin (bounds.getHeight(), 30));
+
+            for (auto& display : juce::Desktop::getInstance().getDisplays().displays)
+                if (display.userArea.getIntersection (titleStrip).getWidth() >= 120)
+                    return true;
+
+            return false;
         }
 
         ~MainWindow() override

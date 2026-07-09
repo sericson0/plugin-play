@@ -1,5 +1,7 @@
 #include "MainComponent.h"
 #include "PluginPicker.h"
+#include "WelcomePopup.h"
+#include "SupportPanel.h"
 #include "../Audio/WasapiEndpoints.h"
 #include "BinaryData.h"
 
@@ -174,6 +176,11 @@ private:
         addHeading ("CONTACT");
         addBody ("For questions, suggestions or bug reports, email "
                  "TangoToolkit@gmail.com.");
+
+        addHeading ("SUPPORT PLUGIN PLAY");
+        addBody ("Plugin Play is free and open source. If it helps your sets, please "
+                 "consider a tip via the DONATE button in the header (Card / Apple Pay, "
+                 "Venmo or Zelle). New here? The GUIDE button reopens the walkthrough.");
     }
 
     void populateVirtualCable()
@@ -468,8 +475,11 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
 {
     scanButton.onClick      = [this] { showScanMenu(); };
     cableButton.onClick     = [this] { CableSetupComponent::launch (engine.deviceManager); };
+    guideButton.onClick     = [this] { WelcomePopup::show (*uiPrefs); };
+    donateButton.onClick    = [this] { SupportPanel::launch(); };
     helpButton.onClick      = [this] { showHelp(); };
     presetsButton.onClick   = [this] { showPresetsMenu(); };
+    donateButton.setColour (juce::TextButton::textColourOffId, accentBright);
     killButton.onClick      = [this] { engine.setMasterBypass (! engine.isMasterBypassed()); };
     killButton.setColour (juce::TextButton::textColourOffId, accentBright);
     killButton.setColour (juce::TextButton::buttonOnColourId, metricBad.darker (0.5f));
@@ -487,6 +497,8 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
 
     scanButton    .setTooltip ("Scan for installed VST3 plugins, or manage extra scan folders");
     cableButton   .setTooltip ("Set up the virtual audio cable that captures your DJ software");
+    guideButton   .setTooltip ("Show the first-run walkthrough again");
+    donateButton  .setTooltip ("Support Plugin Play - Card / Apple Pay, Venmo or Zelle");
     helpButton    .setTooltip ("Open the Plugin Play help & documentation");
     presetsButton .setTooltip ("Save the current chain, or load a saved one");
     killButton    .setTooltip ("Master bypass - turn every effect on or off at once");
@@ -495,6 +507,8 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
 
     addAndMakeVisible (scanButton);
     addAndMakeVisible (cableButton);
+    addAndMakeVisible (guideButton);
+    addAndMakeVisible (donateButton);
     addAndMakeVisible (helpButton);
     addAndMakeVisible (presetsButton);
     addAndMakeVisible (killButton);
@@ -538,8 +552,30 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
 
     deviceTypeSelector.onChange = [this]
     {
-        if (! updatingSelectors)
-            engine.deviceManager.setCurrentAudioDeviceType (deviceTypeSelector.getText(), true);
+        if (updatingSelectors)
+            return;
+
+        // The synthetic "Enable ASIO" item scans + switches to ASIO on demand (it isn't
+        // scanned at startup, where a flaky driver could hang the app). Briefly show a
+        // busy cursor since the driver scan can take a moment.
+        if (deviceTypeSelector.getSelectedId() == asioEnableItemId)
+        {
+            juce::MouseCursor::showWaitCursor();
+            const bool ok = engine.ensureAsioEnabled();
+            juce::MouseCursor::hideWaitCursor();
+
+            if (! ok)
+            {
+                buildDeviceSelectors();   // revert the dropdown
+                juce::AlertWindow::showMessageBoxAsync (
+                    juce::MessageBoxIconType::InfoIcon, "ASIO unavailable",
+                    "No ASIO driver could be loaded. Make sure your audio interface is "
+                    "connected and its driver is installed.");
+            }
+            return;
+        }
+
+        engine.deviceManager.setCurrentAudioDeviceType (deviceTypeSelector.getText(), true);
         // The device manager broadcasts the change; buildDeviceSelectors() then
         // repopulates every selector for the new driver's devices.
     };
@@ -550,7 +586,8 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
     outputSelector      .setTooltip ("Audio output device - where processed audio is sent");
     inputChannelSelector .setTooltip ("Which channel pair of the input device to capture");
     outputChannelSelector.setTooltip ("Which channel pair of the output device to play to");
-    deviceTypeSelector  .setTooltip ("Audio driver type - ASIO gives the lowest latency if available");
+    deviceTypeSelector  .setTooltip ("Audio driver type. Pick 'Enable ASIO' to turn on low-latency ASIO "
+                                     "for your interface (loaded on demand so a driver can't slow startup)");
     sampleRateSelector  .setTooltip ("Sample rate - 'Auto' follows your source to avoid an extra resample");
     bufferSizeSelector  .setTooltip ("Buffer size - smaller means lower latency, larger means more stable");
     testButton          .setTooltip ("Play a short test tone through the current output device");
@@ -668,6 +705,14 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
     buildDeviceSelectors();
     updateStatusText();
     updateRedirectBanner();
+
+    // Show the first-run walkthrough once the window is up (deferred so it centres
+    // over a fully-constructed main window).
+    juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<MainComponent> (this)]
+    {
+        if (safe != nullptr)
+            safe->maybeShowFirstRunGuide();
+    });
 }
 
 MainComponent::~MainComponent()
@@ -753,9 +798,13 @@ void MainComponent::resized()
     auto area = getLocalBounds();
 
     auto header = area.removeFromTop (56).reduced (12, 13);
-    helpButton.setBounds (header.removeFromRight (64));
+    helpButton.setBounds (header.removeFromRight (58));
     header.removeFromRight (8);
-    cableButton.setBounds (header.removeFromRight (124));
+    cableButton.setBounds (header.removeFromRight (118));
+    header.removeFromRight (8);
+    donateButton.setBounds (header.removeFromRight (78));
+    header.removeFromRight (8);
+    guideButton.setBounds (header.removeFromRight (64));
 
     // Redirect banner strip (only takes space while shown), between header + meters.
     if (bannerShown)
@@ -1028,6 +1077,22 @@ void MainComponent::showHelp()
     }
 }
 
+void MainComponent::maybeShowFirstRunGuide()
+{
+    // Show on the very first launch, and again if the installer dropped a marker
+    // (e.g. after a reinstall/upgrade) — otherwise respect "Don't show this again".
+    const bool installerRequested = WelcomePopup::markerFile().existsAsFile();
+
+    if (! installerRequested && uiPrefs->getBoolValue ("seenWelcome", false))
+        return;
+
+    // Consume the installer marker now, so it forces exactly one re-show however the
+    // guide is dismissed (permanent suppression is the "Don't show again" toggle).
+    WelcomePopup::markerFile().deleteFile();
+
+    WelcomePopup::show (*uiPrefs);
+}
+
 //==============================================================================
 void MainComponent::showPresetsMenu()
 {
@@ -1266,6 +1331,12 @@ void MainComponent::refreshDeviceTypes()
             deviceTypeSelector.setSelectedId (id, juce::dontSendNotification);
         ++id;
     }
+
+   #if JUCE_WINDOWS
+    // ASIO is enabled on demand — scanning it at startup can hang on a flaky driver.
+    if (! engine.isAsioEnabled())
+        deviceTypeSelector.addItem ("Enable ASIO (low latency)\xe2\x80\xa6", asioEnableItemId);
+   #endif
 
     deviceTypeSelector.setEnabled (deviceTypeSelector.getNumItems() > 1);
 }
