@@ -109,7 +109,16 @@ AudioEngine::AudioEngine()
 AudioEngine::~AudioEngine()
 {
     stopTimer();
-    saveSession();
+    saveSession();           // persists the redirect intent (mode="redirect" exe=...)
+
+    // Restore any app we routed into the cable back to its normal output so it isn't
+    // left silently playing into the cable after we exit. The saved session still
+    // records the redirect, so relaunching Plugin Play re-applies it.
+    if (redirectedApp.isNotEmpty())
+    {
+        AppRouting::clearAppOutput (redirectedPid);
+        redirectMarkerFile().deleteFile();
+    }
 
     deviceManager.removeChangeListener (this);
     deviceManager.removeAudioCallback (&meterTap);
@@ -285,6 +294,16 @@ void AudioEngine::setLimiterEnabled (bool shouldLimit)
 //==============================================================================
 void AudioEngine::setCaptureSource (juce::uint32 targetPid)
 {
+    // Remember the target's executable so the choice survives a relaunch (the PID
+    // won't). Resolved on the message thread from the same list the picker shows.
+    capturedExecutable.clear();
+    for (const auto& source : enumerateAudioSources())
+        if (source.pid == targetPid)
+        {
+            capturedExecutable = source.executable;
+            break;
+        }
+
     // Match the capture rate to the output device so Windows resamples the source
     // and our FIFO only absorbs clock drift.
     captureStartedRate = currentSampleRate();
@@ -292,6 +311,7 @@ void AudioEngine::setCaptureSource (juce::uint32 targetPid)
 
     useCaptureInput = true;
     rebuildConnections();
+    scheduleSave();
     sendChangeMessage();
 }
 
@@ -300,8 +320,152 @@ void AudioEngine::setDeviceInput()
     capture.stop();
 
     useCaptureInput = false;
+    capturedExecutable.clear();
     rebuildConnections();
+    scheduleSave();
     sendChangeMessage();
+}
+
+//==============================================================================
+juce::File AudioEngine::redirectMarkerFile() const
+{
+    return getSessionFile().getSiblingFile ("redirect.marker");
+}
+
+juce::String AudioEngine::setRedirectedApp (juce::uint32 pid, const juce::String& exe)
+{
+    if (! AppRouting::isSupported())
+        return "Per-app audio routing isn't available on this version of Windows. "
+               "Use VIRTUAL CABLE to route your app manually.";
+
+    AppRouting::CablePair cable;
+    if (! AppRouting::findCable (cable))
+        return "No virtual cable was found. Open VIRTUAL CABLE to install one, then try again.";
+
+    if (! AppRouting::routeAppOutput (pid, cable.renderDeviceId))
+        return "Couldn't redirect that app's audio output. Please try again.";
+
+    applyRedirect (pid, exe, cable.captureName);
+    return {};
+}
+
+void AudioEngine::applyRedirect (juce::uint32 pid, const juce::String& exe,
+                                 const juce::String& captureName)
+{
+    // Release a previously-redirected app (if switching targets) before taking over.
+    if (redirectedApp.isNotEmpty() && redirectedPid != pid)
+        AppRouting::clearAppOutput (redirectedPid);
+
+    redirectedApp = exe;
+    redirectedPid = pid;
+
+    // Persist that we hold a redirect, so a crash/force-kill can be undone next launch
+    // (otherwise the app is left silently playing into the cable).
+    redirectMarkerFile().replaceWithText (exe);
+
+    // The app now plays into the cable; read the cable's recording endpoint as our
+    // input. This is the ordinary device-input path — no loopback, no muting.
+    useCaptureInput = false;
+
+    auto setup = deviceManager.getAudioDeviceSetup();
+    if (setup.inputDeviceName != captureName)
+    {
+        setup.inputDeviceName = captureName;
+        setup.useDefaultInputChannels = true;
+        deviceManager.setAudioDeviceSetup (setup, true);   // broadcasts a device change
+    }
+
+    rebuildConnections();
+    scheduleSave();
+    sendChangeMessage();
+}
+
+void AudioEngine::clearRedirectedApp()
+{
+    if (redirectedApp.isEmpty())
+        return;
+
+    AppRouting::clearAppOutput (redirectedPid);
+    redirectMarkerFile().deleteFile();
+    redirectedApp.clear();
+    redirectedPid = 0;
+
+    scheduleSave();
+    sendChangeMessage();
+}
+
+void AudioEngine::cleanupStaleRedirect()
+{
+    auto marker = redirectMarkerFile();
+    if (! marker.existsAsFile())
+        return;
+
+    const auto exe = marker.loadFileAsString().trim();
+    marker.deleteFile();
+
+    // A previous run (possibly crashed) left this app routed into the cable. Restore
+    // it to its normal output. loadSession re-applies the redirect afterwards if the
+    // saved session still wants it (so a clean relaunch just re-wires the cable).
+    if (exe.isNotEmpty())
+        for (const auto& source : enumerateAudioSources())
+            if (source.executable.equalsIgnoreCase (exe))
+                AppRouting::clearAppOutput (source.pid);
+}
+
+void AudioEngine::restoreRedirectFromSession (const juce::XmlElement& session)
+{
+    auto* input = session.getChildByName ("INPUT");
+    if (input == nullptr)
+        return;
+
+    // "redirect" is the current mode; "capture" is the legacy loopback mode, which we
+    // migrate to a redirect (the app-input feature the user now expects).
+    const auto mode = input->getStringAttribute ("mode");
+    if (mode != "redirect" && mode != "capture")
+        return;
+
+    const auto exe = input->getStringAttribute ("exe");
+    if (exe.isEmpty())
+        return;
+
+    // Re-resolve the saved executable to a running PID (prefer an active session). If
+    // it isn't running this launch, stay on the saved input device; the user re-picks.
+    juce::uint32 chosen = 0;
+    for (const auto& source : enumerateAudioSources())
+        if (source.executable.equalsIgnoreCase (exe))
+        {
+            chosen = source.pid;
+            if (source.active)
+                break;
+        }
+
+    if (chosen != 0)
+        setRedirectedApp (chosen, exe);
+}
+
+void AudioEngine::restoreInputSource (const juce::XmlElement& session)
+{
+    auto* input = session.getChildByName ("INPUT");
+    if (input == nullptr || input->getStringAttribute ("mode") != "capture")
+        return;   // device input is the default — nothing to restore
+
+    const auto exe = input->getStringAttribute ("exe");
+    if (exe.isEmpty())
+        return;
+
+    // Re-resolve the saved executable to a running PID (prefer an active session).
+    // If the app isn't running this launch, stay on device input; the user re-picks.
+    juce::uint32 chosen = 0;
+    for (const auto& source : enumerateAudioSources())
+        if (source.executable.equalsIgnoreCase (exe))
+        {
+            chosen = source.pid;
+            if (source.active)
+                break;
+        }
+
+    if (chosen != 0)
+        setCaptureSource (chosen);
 }
 
 //==============================================================================
@@ -445,10 +609,43 @@ void AudioEngine::saveSession()
     if (auto deviceState = deviceManager.createStateXml())
         devices->addChildElement (deviceState.release());
 
+    // Input routing. An app-to-cable redirect is saved by executable name (a saved
+    // PID would be meaningless next launch); a plain device input saves as "device".
+    // The quarantined loopback path only writes "capture" when explicitly enabled.
+    auto* input = session.createNewChildElement ("INPUT");
+    bool wroteInputMode = false;
+
+    if (redirectedApp.isNotEmpty())
+    {
+        input->setAttribute ("mode", "redirect");
+        input->setAttribute ("exe", redirectedApp);
+        wroteInputMode = true;
+    }
+
+    if constexpr (enableLoopbackCapture)   // quarantined loopback path
+    {
+        if (! wroteInputMode && useCaptureInput && capturedExecutable.isNotEmpty())
+        {
+            input->setAttribute ("mode", "capture");
+            input->setAttribute ("exe", capturedExecutable);
+            wroteInputMode = true;
+        }
+    }
+
+    if (! wroteInputMode)
+        input->setAttribute ("mode", "device");
+
     session.addChildElement (createChainXml().release());
 
     auto file = getSessionFile();
     file.getParentDirectory().createDirectory();
+
+    // Rotate the last known-good session to a backup before overwriting, so a
+    // corrupt/truncated primary (older builds, disk trouble) can be rolled back on
+    // load rather than silently resetting the user's whole setup.
+    if (file.existsAsFile() && juce::XmlDocument::parse (file) != nullptr)
+        file.copyFileTo (file.getSiblingFile ("session.bak"));
+
     session.writeTo (file);
 }
 
@@ -487,10 +684,21 @@ void AudioEngine::loadSession()
 {
     ++restoreGeneration;   // supersede any restore already in flight
 
+    // Undo any app→cable redirect a previous (possibly crashed) run left behind before
+    // we re-open devices and re-apply the saved input.
+    cleanupStaleRedirect();
+
     std::unique_ptr<juce::XmlElement> session;
 
     if (auto file = getSessionFile(); file.existsAsFile())
+    {
         session = juce::XmlDocument::parse (file);
+
+        // Primary is corrupt/unparseable: fall back to the last-good backup rather
+        // than silently resetting devices + chain to defaults.
+        if (session == nullptr)
+            session = juce::XmlDocument::parse (file.getSiblingFile ("session.bak"));
+    }
 
     const juce::XmlElement* deviceState = nullptr;
     if (session != nullptr)
@@ -505,6 +713,12 @@ void AudioEngine::loadSession()
 
     deviceManager.initialise (2, 2, deviceState, true);
     rebuildConnections();
+
+    // Restore the input routing now the output device is open. Re-applies an app→cable
+    // redirect (migrating legacy loopback "capture" sessions too); does nothing if the
+    // saved app isn't running this launch — the user re-picks from the dropdown.
+    if (session != nullptr)
+        restoreRedirectFromSession (*session);
 
     if (session != nullptr)
     {

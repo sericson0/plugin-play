@@ -1,6 +1,5 @@
 #include "MainComponent.h"
 #include "PluginPicker.h"
-#include "InputSourcePicker.h"
 #include "../Audio/WasapiEndpoints.h"
 #include "BinaryData.h"
 
@@ -220,6 +219,16 @@ private:
         addBody ("The device bar below the meters has INPUT and OUTPUT selectors. "
                  "Set INPUT to your virtual cable (the sound coming from your DJ "
                  "software) and OUTPUT to your speakers or audio interface.");
+
+        addHeading ("SENDING AN APP THROUGH PLUGIN PLAY");
+        addBody ("The INPUT dropdown also lists the apps currently playing audio, under "
+                 "'Send an app through Plugin Play'. Pick one (e.g. Spotify) and Plugin "
+                 "Play routes that app's output into the virtual cable and reads it back "
+                 "for you - no need to open Windows sound settings. Its processed audio "
+                 "comes out your normal OUTPUT device, so you can keep using one pair of "
+                 "speakers. This needs a virtual cable installed (see the Virtual Cable "
+                 "tab); Plugin Play restores the app's sound to normal when you switch "
+                 "away or close it.");
 
         addHeading ("EXPANDING THE PANEL");
         addBody ("Use the expand toggle to reveal the advanced controls:\n"
@@ -458,7 +467,6 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
     : engine (engineToUse), scanner (scannerToUse)
 {
     scanButton.onClick      = [this] { showScanMenu(); };
-    sourceButton.onClick    = [this] { InputSourcePicker::launch (engine); };
     cableButton.onClick     = [this] { CableSetupComponent::launch (engine.deviceManager); };
     helpButton.onClick      = [this] { showHelp(); };
     presetsButton.onClick   = [this] { showPresetsMenu(); };
@@ -478,7 +486,6 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
     addPluginButton.onClick = [this] { showAddPluginMenu (addPluginButton.getScreenPosition()); };
 
     scanButton    .setTooltip ("Scan for installed VST3 plugins, or manage extra scan folders");
-    sourceButton  .setTooltip ("Choose the input: an audio device, or capture a running app directly (no install)");
     cableButton   .setTooltip ("Set up the virtual audio cable that captures your DJ software");
     helpButton    .setTooltip ("Open the Plugin Play help & documentation");
     presetsButton .setTooltip ("Save the current chain, or load a saved one");
@@ -487,7 +494,6 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
     addPluginButton.setTooltip ("Add a plugin to the end of the effect chain");
 
     addAndMakeVisible (scanButton);
-    addAndMakeVisible (sourceButton);
     addAndMakeVisible (cableButton);
     addAndMakeVisible (helpButton);
     addAndMakeVisible (presetsButton);
@@ -522,7 +528,7 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
 
     inputSelector .setTextWhenNoChoicesAvailable ("No inputs");
     outputSelector.setTextWhenNoChoicesAvailable ("No outputs");
-    inputSelector .onChange = [this] { if (! updatingSelectors) applyDeviceSelection(); };
+    inputSelector .onChange = [this] { if (! updatingSelectors) applyInputSelection(); };
     outputSelector.onChange = [this] { if (! updatingSelectors) applyDeviceSelection(); };
 
     inputChannelSelector .setTextWhenNoChoicesAvailable ("-");
@@ -538,7 +544,9 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
         // repopulates every selector for the new driver's devices.
     };
 
-    inputSelector       .setTooltip ("Audio input device - the capture source (usually the virtual cable)");
+    inputSelector       .setTooltip ("Where Plugin Play gets its audio: an input device (e.g. the virtual "
+                                     "cable), or a running app - pick an app and Plugin Play routes it "
+                                     "through the cable for you (needs a virtual cable installed)");
     outputSelector      .setTooltip ("Audio output device - where processed audio is sent");
     inputChannelSelector .setTooltip ("Which channel pair of the input device to capture");
     outputChannelSelector.setTooltip ("Which channel pair of the output device to play to");
@@ -739,8 +747,6 @@ void MainComponent::resized()
     helpButton.setBounds (header.removeFromRight (64));
     header.removeFromRight (8);
     cableButton.setBounds (header.removeFromRight (124));
-    header.removeFromRight (8);
-    sourceButton.setBounds (header.removeFromRight (118));
 
     // Meter row: IN meter | FX kill switch | OUT meter | LIMITER.
     auto meterRow = area.removeFromTop (40).reduced (16, 6);
@@ -1063,8 +1069,27 @@ void MainComponent::promptSavePreset()
             if (result != 1 || name.isEmpty())
                 return;
 
-            const auto file = engine.getPresetsDirectory()
-                                  .getChildFile (juce::File::createLegalFileName (name) + ".xml");
+            // createLegalFileName strips illegal characters but not names that
+            // reduce to nothing (e.g. "???" -> "") or Windows reserved device names
+            // (CON, NUL, COM1...), which the filesystem refuses to create.
+            auto base = juce::File::createLegalFileName (name).trim();
+            while (base.endsWithChar ('.') || base.endsWithChar (' '))
+                base = base.dropLastCharacters (1).trim();
+
+            static const juce::StringArray reserved {
+                "CON", "PRN", "AUX", "NUL",
+                "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+                "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9" };
+
+            if (base.isEmpty() || reserved.contains (base, true))
+            {
+                juce::AlertWindow::showMessageBoxAsync (
+                    juce::MessageBoxIconType::WarningIcon, "Invalid preset name",
+                    "\"" + name + "\" isn't a usable file name. Please choose another.");
+                return;
+            }
+
+            const auto file = engine.getPresetsDirectory().getChildFile (base + ".xml");
 
             if (file.existsAsFile())
             {
@@ -1102,31 +1127,95 @@ void MainComponent::buildDeviceSelectors()
     auto* type = engine.deviceManager.getCurrentDeviceTypeObject();
     auto setup = engine.deviceManager.getAudioDeviceSetup();
 
-    auto fill = [type] (juce::ComboBox& box, bool wantInputs, const juce::String& selected)
+    outputSelector.clear (juce::dontSendNotification);
+
+    if (type != nullptr)
     {
-        box.clear (juce::dontSendNotification);
-
-        if (type == nullptr)
-            return;
-
         int id = 1;
-        for (const auto& name : type->getDeviceNames (wantInputs))
+        for (const auto& name : type->getDeviceNames (false))
         {
-            box.addItem (name, id);
-            if (name == selected)
-                box.setSelectedId (id, juce::dontSendNotification);
+            outputSelector.addItem (name, id);
+            if (name == setup.outputDeviceName)
+                outputSelector.setSelectedId (id, juce::dontSendNotification);
             ++id;
         }
-    };
+    }
 
-    fill (inputSelector,  true,  setup.inputDeviceName);
-    fill (outputSelector, false, setup.outputDeviceName);
-
+    refreshInputSelector();
     refreshDeviceTypes();
     refreshChannelSelectors();
     refreshSampleRates();
     refreshBufferSizes();
     checkSampleRate();
+}
+
+void MainComponent::refreshInputSelector()
+{
+    const juce::ScopedValueSetter<bool> guard (updatingSelectors, true);
+
+    auto* type = engine.deviceManager.getCurrentDeviceTypeObject();
+    const auto selectedDevice = engine.deviceManager.getAudioDeviceSetup().inputDeviceName;
+    const bool redirecting = engine.isRedirectingApp();
+    const auto redirectedApp = engine.redirectedAppName();
+
+    inputSelector.clear (juce::dontSendNotification);
+
+    // 1) Audio input devices (ids 1..N) — virtual cable, hardware loopback, etc.
+    if (type != nullptr)
+    {
+        int id = 1;
+        for (const auto& name : type->getDeviceNames (true))
+        {
+            inputSelector.addItem (name, id);
+            if (! redirecting && name == selectedDevice)
+                inputSelector.setSelectedId (id, juce::dontSendNotification);
+            ++id;
+        }
+    }
+
+    // 2) Running apps (ids captureItemBase + index). Picking one redirects that app's
+    //    audio into the cable and reads it back — Plugin Play wires the cable for you.
+    captureSources = engine.availableCaptureSources();
+
+    if (! captureSources.empty())
+    {
+        inputSelector.addSeparator();
+        if (auto* root = inputSelector.getRootMenu())
+            root->addSectionHeader ("Send an app through Plugin Play");
+
+        for (size_t i = 0; i < captureSources.size(); ++i)
+        {
+            const auto& s = captureSources[i];
+            auto label = s.executable.isNotEmpty() ? s.executable : ("PID " + juce::String (s.pid));
+            if (s.displayName.isNotEmpty() && ! s.displayName.equalsIgnoreCase (s.executable))
+                label << "  \xe2\x80\x94  " << s.displayName;
+            if (s.active)
+                label << "   [ACTIVE]";
+
+            inputSelector.addItem (label, captureItemBase + (int) i);
+        }
+    }
+
+    // Reflect the app we're currently redirecting (matched by executable name). If it
+    // isn't in the enumerated list any more (went idle), add a synthetic entry so the
+    // choice still shows as selected.
+    if (redirecting)
+    {
+        auto it = std::find_if (captureSources.begin(), captureSources.end(),
+                                [&] (const AudioSource& s) { return s.executable.equalsIgnoreCase (redirectedApp); });
+
+        if (it != captureSources.end())
+        {
+            inputSelector.setSelectedId (captureItemBase + (int) std::distance (captureSources.begin(), it),
+                                         juce::dontSendNotification);
+        }
+        else
+        {
+            const int id = captureItemBase + (int) captureSources.size();
+            inputSelector.addItem (redirectedApp + "   [routed]", id);
+            inputSelector.setSelectedId (id, juce::dontSendNotification);
+        }
+    }
 }
 
 void MainComponent::refreshDeviceTypes()
@@ -1246,11 +1335,59 @@ void MainComponent::refreshBufferSizes()
     bufferSizeSelector.setSelectedId (current, juce::dontSendNotification);
 }
 
+void MainComponent::applyInputSelection()
+{
+    const auto id = inputSelector.getSelectedId();
+
+    // An app: redirect its audio into the cable and read it back. The engine sets the
+    // input device to the cable's recording endpoint for us. If no cable is installed
+    // (or routing is unsupported), tell the user and offer the cable setup, then revert
+    // the selection to whatever the input device currently is.
+    if (id >= captureItemBase)
+    {
+        const auto index = (size_t) (id - captureItemBase);
+        if (index >= captureSources.size())
+            return;
+
+        const auto& source = captureSources[index];
+        const auto error = engine.setRedirectedApp (source.pid, source.executable);
+
+        if (error.isNotEmpty())
+        {
+            buildDeviceSelectors();   // revert the dropdown to the real input device
+
+            juce::AlertWindow::showOkCancelBox (
+                juce::MessageBoxIconType::InfoIcon, "Couldn't route that app",
+                error, "Set up cable", "Cancel", this,
+                juce::ModalCallbackFunction::create (
+                    [safe = juce::Component::SafePointer<MainComponent> (this)] (int r)
+                    {
+                        if (r == 1 && safe != nullptr)
+                            CableSetupComponent::launch (safe->engine.deviceManager);
+                    }));
+        }
+        return;
+    }
+
+    // A real audio input device: stop any app redirect, then apply the device.
+    if (engine.isRedirectingApp())
+        engine.clearRedirectedApp();
+
+    applyDeviceSelection();
+}
+
 void MainComponent::applyDeviceSelection()
 {
     auto setup = engine.deviceManager.getAudioDeviceSetup();
 
-    setup.inputDeviceName  = inputSelector .getText();
+    // Only drive the input device from the selector when it points at an actual
+    // device; while an app is selected the input selector holds an app entry whose
+    // text is an app name, not a device (e.g. an OUTPUT change must not clobber the
+    // cable-output input device the redirect set up with it).
+    const auto inputId = inputSelector.getSelectedId();
+    if (inputId > 0 && inputId < captureItemBase)
+        setup.inputDeviceName = inputSelector.getText();
+
     setup.outputDeviceName = outputSelector.getText();
     setup.useDefaultInputChannels  = true;
     setup.useDefaultOutputChannels = true;
@@ -1549,12 +1686,15 @@ void MainComponent::updateStatusText()
     }
     else if (auto* device = engine.deviceManager.getCurrentAudioDevice())
     {
-        const auto latencyMs = 1000.0 * device->getOutputLatencyInSamples()
-                                      / device->getCurrentSampleRate();
+        // A just-opened device can momentarily report a 0 sample rate — guard the
+        // latency division so it doesn't produce inf/NaN in the status line.
+        const auto rate = device->getCurrentSampleRate();
+        const auto latencyMs = rate > 0.0 ? 1000.0 * device->getOutputLatencyInSamples() / rate
+                                          : 0.0;
 
         text << engine.deviceManager.getCurrentAudioDeviceType()
              << "  |  " << device->getName()
-             << "  |  " << juce::String (device->getCurrentSampleRate() / 1000.0, 1) << " kHz"
+             << "  |  " << juce::String (rate / 1000.0, 1) << " kHz"
              << "  |  " << device->getCurrentBufferSizeSamples() << " smp"
              << "  |  out " << juce::String (latencyMs, 1) << " ms";
 

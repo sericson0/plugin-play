@@ -39,6 +39,8 @@ public:
 
     void processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) override
     {
+        juce::ScopedNoDenormals noDenormals;   // self-protecting, independent of the host callback
+
         const int numSamples  = buffer.getNumSamples();
         const int numChannels = buffer.getNumChannels();
 

@@ -29,7 +29,8 @@ public:
 
         engine->loadSession();
 
-        mainWindow = std::make_unique<MainWindow> (getApplicationName(), *engine, *scanner);
+        mainWindow = std::make_unique<MainWindow> (getApplicationName(), *engine, *scanner,
+                                                   *appProperties.getUserSettings());
 
         // First run: populate the plugin list automatically.
         if (scanner->knownPlugins.getTypes().isEmpty())
@@ -51,17 +52,33 @@ private:
     class MainWindow : public juce::DocumentWindow
     {
     public:
-        MainWindow (const juce::String& name, play::AudioEngine& engine, play::PluginScanner& scanner)
+        MainWindow (const juce::String& name, play::AudioEngine& engine, play::PluginScanner& scanner,
+                    juce::PropertiesFile& settingsToUse)
             : juce::DocumentWindow (name, play::Colours::panelBackground,
-                                    juce::DocumentWindow::allButtons)
+                                    juce::DocumentWindow::allButtons),
+              settings (settingsToUse)
         {
             setUsingNativeTitleBar (true);
             setContentOwned (new play::MainComponent (engine, scanner), true);
             setResizable (true, false);
             setResizeLimits (700, 560, 10000, 10000);
-            centreWithSize (getWidth(), getHeight());
+
+            // Restore the last window position/size if we have one; otherwise centre
+            // at the content's default size.
+            const auto state = settings.getValue ("windowState");
+            if (state.isNotEmpty())
+                restoreWindowStateFromString (state);
+            else
+                centreWithSize (getWidth(), getHeight());
+
             setVisible (true);
             play::applyDarkTitleBar (*this);
+        }
+
+        ~MainWindow() override
+        {
+            settings.setValue ("windowState", getWindowStateAsString());
+            settings.saveIfNeeded();
         }
 
         void closeButtonPressed() override
@@ -70,6 +87,7 @@ private:
         }
 
     private:
+        juce::PropertiesFile& settings;
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainWindow)
     };
 

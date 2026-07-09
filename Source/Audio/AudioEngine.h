@@ -1,6 +1,7 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include "AppRouting.h"
 #include "LoopbackCapture.h"
 
 namespace play
@@ -64,20 +65,35 @@ public:
     bool isLimiterEnabled() const noexcept          { return limiterEnabled; }
 
     //==============================================================================
-    /** Input routing. The chain is fed either by the selected input DEVICE
-        (default; virtual-cable / hardware-loopback path) or by DRIVERLESS
-        process-loopback CAPTURE of a chosen application, which also master-mutes
-        the default render endpoint to kill the app's dry signal at the speakers. */
+    /** Running apps that can be picked as an input source (one entry per app). */
     std::vector<AudioSource> availableCaptureSources() const { return enumerateAudioSources(); }
 
-    /** Switch the chain's input to driverless capture of the given process. */
+    /** App-to-cable input. Picking an app redirects THAT app's audio output into the
+        virtual cable (via AppRouting / per-app device routing) and points Plugin
+        Play's input at the cable's recording endpoint — so the user just picks an
+        app and we wire the cable for them, output stays on the same speakers, and no
+        Windows sound-settings fiddling is needed. Returns "" on success, otherwise a
+        human-readable error (no cable installed, or routing unsupported on this OS).
+        This replaces the driverless loopback+mute path as the app-input method. */
+    juce::String setRedirectedApp (juce::uint32 pid, const juce::String& exe);
+
+    /** Stop redirecting: restore the app's output to the system default. Leaves the
+        input device as-is (the caller sets a new device when switching away). */
+    void clearRedirectedApp();
+
+    bool isRedirectingApp() const noexcept          { return redirectedApp.isNotEmpty(); }
+    juce::String redirectedAppName() const          { return redirectedApp; }
+
+    //==============================================================================
+    // QUARANTINED: driverless process-loopback CAPTURE of an app, which master-mutes
+    // the default render endpoint to kill the dry signal. Superseded by the app-to-
+    // cable redirect above (it needs no muting and works with a single output). Kept
+    // compiled but unused; gate on enableLoopbackCapture to revive.
     void setCaptureSource (juce::uint32 pid);
-
-    /** Switch the chain's input back to the selected audio input device. */
     void setDeviceInput();
-
     bool isCapturingInput() const noexcept          { return useCaptureInput; }
     juce::uint32 capturedSourcePid() const noexcept { return capture.targetPid(); }
+    juce::String capturedSourceName() const         { return capturedExecutable; }
 
     //==============================================================================
     /** Restores the most recently removed plugin (state and position intact).
@@ -161,11 +177,30 @@ private:
     MasterProcessor* master = nullptr;
     std::vector<PluginSlotInfo> slots;
 
-    // Driverless process-loopback capture. When useCaptureInput is true the chain
-    // head is captureSourceNode (fed by `capture`) instead of the device input.
+    // App-to-cable redirect state: the exe currently routed into the cable (empty =
+    // none) and the live PID we set the per-app override on (needed to clear it).
+    juce::String redirectedApp;
+    juce::uint32 redirectedPid = 0;
+
+    void applyRedirect (juce::uint32 pid, const juce::String& exe, const juce::String& captureName);
+    void restoreRedirectFromSession (const juce::XmlElement& session);
+    void cleanupStaleRedirect();
+    juce::File redirectMarkerFile() const;
+
+    // Feature flag for the QUARANTINED loopback+mute capture path. Off: the engine
+    // never mutes an endpoint and legacy mode="capture" sessions migrate to redirect.
+    static constexpr bool enableLoopbackCapture = false;
+
+    // Driverless process-loopback capture (quarantined). When useCaptureInput is true
+    // the chain head is captureSourceNode (fed by `capture`) instead of device input.
     LoopbackCapture capture;
     bool useCaptureInput = false;
     double captureStartedRate = 0.0;
+    // Executable of the current capture target, remembered so the source survives
+    // a relaunch (the PID won't — we re-resolve the name to a live PID on load).
+    juce::String capturedExecutable;
+
+    void restoreInputSource (const juce::XmlElement& session);
 
     std::atomic<float> inputPeaks[2]  { 0.0f, 0.0f };
     std::atomic<float> outputPeaks[2] { 0.0f, 0.0f };

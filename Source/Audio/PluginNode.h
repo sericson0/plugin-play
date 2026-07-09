@@ -76,6 +76,8 @@ public:
 
     void processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) override
     {
+        juce::ScopedNoDenormals noDenormals;   // the ring-buffer/crossfade math can breed denormals
+
         const int numSamples = buffer.getNumSamples();
         const int numOut      = getTotalNumOutputChannels();
         const int numIn       = getTotalNumInputChannels();

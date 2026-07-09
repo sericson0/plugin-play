@@ -66,9 +66,11 @@ namespace VirtualCable
             const std::regex re (R"(VBCABLE_Driver_Pack(\d+)\.zip)");
             int best = -1;
 
+            // getIntValue never throws (unlike std::stoi, which would terminate the
+            // background install thread on a pathologically long digit run).
             for (auto it = std::sregex_iterator (html.begin(), html.end(), re);
                  it != std::sregex_iterator(); ++it)
-                best = juce::jmax (best, std::stoi ((*it)[1].str()));
+                best = juce::jmax (best, juce::String ((*it)[1].str()).getIntValue());
 
             if (best >= 0)
                 return "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack"
@@ -84,13 +86,24 @@ namespace VirtualCable
         if (in == nullptr)
             return false;
 
+        const auto expected = in->getTotalLength();   // -1 if the server didn't say
+
         dest.deleteFile();
         juce::FileOutputStream out (dest);
         if (! out.openedOk())
             return false;
 
-        out.writeFromInputStream (*in, -1);
+        const auto written = out.writeFromInputStream (*in, -1);
         out.flush();
+
+        // A dropped connection yields a partial zip that would otherwise "succeed"
+        // and then fail deeper in unzip with a misleading message. Reject it here if
+        // the byte count falls short of the advertised Content-Length.
+        if (expected > 0 && written < expected)
+        {
+            dest.deleteFile();
+            return false;
+        }
 
         return dest.getSize() > 0;
     }

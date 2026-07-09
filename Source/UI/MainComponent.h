@@ -135,9 +135,11 @@ private:
     // Inline input/output/sample-rate selection (the "device bar" below the meters).
     void buildDeviceSelectors();
     void refreshDeviceTypes();
+    void refreshInputSelector();
     void refreshChannelSelectors();
     void refreshSampleRates();
     void refreshBufferSizes();
+    void applyInputSelection();
     void applyDeviceSelection();
     void applyChannelSelection (bool isInput);
     void applySampleRate (double rate);
@@ -149,7 +151,6 @@ private:
     PluginScanner& scanner;
 
     juce::TextButton scanButton       { "SCAN PLUGINS" };
-    juce::TextButton sourceButton     { "INPUT SOURCE" };
     juce::TextButton cableButton      { "VIRTUAL CABLE" };
     juce::TextButton helpButton       { "HELP" };
     juce::TextButton presetsButton    { "PRESETS" };
@@ -187,6 +188,13 @@ private:
     // rates in Hz are always well above this, so the id can't collide with one.
     static constexpr int autoRateItemId = 1;
     std::unique_ptr<juce::PropertiesFile> uiPrefs;
+
+    // The INPUT dropdown lists audio input devices (ids 1..N) followed by running
+    // apps that can be captured driverlessly (ids captureItemBase + index into
+    // captureSources). The base sits well above any plausible device count so the
+    // two id ranges can't collide.
+    static constexpr int captureItemBase = 10000;
+    std::vector<AudioSource> captureSources;
 
     juce::Viewport viewport;
     ChainView chainView { engine };
