@@ -84,6 +84,12 @@ public:
     bool isRedirectingApp() const noexcept          { return redirectedApp.isNotEmpty(); }
     juce::String redirectedAppName() const          { return redirectedApp; }
 
+    /** True while an app redirect is active AND that app's process is still alive.
+        The UI polls this to notice the redirected app quitting (audio would otherwise
+        just go silent) so it can stop routing and tell the user. Returns true when not
+        redirecting, so callers only act on a false result. */
+    bool isRedirectedAppRunning() const;
+
     //==============================================================================
     // QUARANTINED: driverless process-loopback CAPTURE of an app, which master-mutes
     // the default render endpoint to kill the dry signal. Superseded by the app-to-
@@ -153,7 +159,7 @@ private:
     void scheduleSave();
 
     std::unique_ptr<juce::XmlElement> createSlotXml (int index) const;
-    std::unique_ptr<juce::XmlElement> createChainXml() const;
+    std::unique_ptr<juce::XmlElement> createChainXml (bool includeGhosts = true) const;
 
     void rebuildConnections();
     void connectNodes (juce::AudioProcessorGraph::NodeID source, juce::AudioProcessorGraph::NodeID dest);
@@ -218,6 +224,21 @@ private:
     // and the index it was at.
     std::unique_ptr<juce::XmlElement> lastRemovedSlot;
     int lastRemovedIndex = 0;
+
+    // Slots from a restored session whose plugin failed to instantiate (missing DLL,
+    // momentarily-locked file, not-yet-mounted drive, one-off init failure). Their
+    // original XML is retained and re-emitted verbatim on every save — keyed by their
+    // position in the restored chain — so a *transient* failure never permanently
+    // deletes the plugin; the next launch retries it. Dropped the moment the user makes
+    // a structural edit (add/remove/reorder), since they've then accepted the chain as
+    // shown. Empty in the normal case, where createChainXml behaves exactly as before.
+    struct GhostSlot
+    {
+        int originalIndex = 0;
+        std::unique_ptr<juce::XmlElement> xml;
+    };
+    std::vector<GhostSlot> ghostSlots;
+    void dropGhostSlots();
 
     JUCE_DECLARE_WEAK_REFERENCEABLE (AudioEngine)
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioEngine)

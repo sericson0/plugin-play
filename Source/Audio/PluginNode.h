@@ -119,8 +119,14 @@ public:
 
             for (int n = 0; n < numSamples; ++n)
             {
-                const float g = mixRamp[(size_t) n];
-                wet[n] = wet[n] * (1.0f - g) + dry[n] * g;
+                const float g   = mixRamp[(size_t) n];
+                const float out = wet[n] * (1.0f - g) + dry[n] * g;
+
+                // Contain a non-finite sample here, at the slot that produced it, so a
+                // plugin emitting NaN/Inf can't propagate it into the next plugin (many
+                // filters/reverbs latch NaN into their state and never recover). The
+                // master node has its own final guard; this keeps the chain healthy.
+                wet[n] = std::isfinite (out) ? out : 0.0f;
             }
         }
     }

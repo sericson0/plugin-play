@@ -1,8 +1,20 @@
+# Plugin Play — free/donation VST3 chain host for DJs.
+# Licensed under the GNU General Public License v3.0 (see LICENSE). Uses JUCE and
+# the Steinberg VST3 SDK under their GPLv3 grants (see THIRD_PARTY_NOTICES.md).
 cmake_minimum_required(VERSION 3.22)
 project(PluginPlay VERSION 0.1.0 LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Statically link the MSVC runtime (/MT) so the app launches on a clean Windows
+# machine that has no Visual C++ redistributable — the "single simple download"
+# goal. Must be set BEFORE JUCE is fetched so JUCE's own targets use the same
+# runtime; mixing /MT and /MD across libraries is a link error. CMP0091 (NEW by
+# default at cmake ≥ 3.15) makes CMAKE_MSVC_RUNTIME_LIBRARY authoritative.
+if (MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
 
 # ── Fetch JUCE ───────────────────────────────────────────────────────────────
 include(FetchContent)

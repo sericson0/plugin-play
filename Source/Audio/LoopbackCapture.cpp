@@ -243,9 +243,22 @@ void LoopbackCapture::stop()
 
 void LoopbackCapture::read (float* const* dest, int numChannels, int numSamples) noexcept
 {
+    const int ringChans = ring.getNumChannels();
+
+    // Not capturing — either the quarantined path is disabled (start() never ran, so
+    // ring is empty) or we're between stop() and start(). Emit silence and bail before
+    // touching the FIFO/ring: otherwise jmin(ch, ringChans-1) indexes channel -1 on an
+    // unsized buffer (undefined behaviour, and a debug assert on every audio block).
+    if (! active.load (std::memory_order_acquire) || ringChans <= 0)
+    {
+        for (int ch = 0; ch < numChannels; ++ch)
+            if (dest[ch] != nullptr)
+                juce::FloatVectorOperations::clear (dest[ch], numSamples);
+        return;
+    }
+
     const int ready     = fifo.getNumReady();
     const int toRead    = juce::jmin (ready, numSamples);
-    const int ringChans = ring.getNumChannels();
 
     int start1, size1, start2, size2;
     fifo.prepareToRead (toRead, start1, size1, start2, size2);

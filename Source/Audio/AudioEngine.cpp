@@ -172,6 +172,7 @@ void AudioEngine::addPlugin (const juce::PluginDescription& description,
             auto wrapper = std::make_unique<PluginNode> (std::move (instance));
             wrapper->setMasterBypass (self.masterBypassed);
             auto node = self.graph.addNode (std::move (wrapper));
+            self.dropGhostSlots();   // a structural edit: accept the chain as it stands
             self.slots.push_back ({ node->nodeID, description, false });
 
             self.rebuildConnections();
@@ -187,6 +188,8 @@ void AudioEngine::removePlugin (int index)
 {
     if (! juce::isPositiveAndBelow (index, (int) slots.size()))
         return;
+
+    dropGhostSlots();   // a structural edit: the user has accepted the pruned chain
 
     auto nodeID = slots[(size_t) index].nodeID;
 
@@ -210,8 +213,15 @@ void AudioEngine::undoRemove()
     if (lastRemovedSlot == nullptr)
         return;
 
+    dropGhostSlots();   // a structural edit
+
     auto slotXml = std::move (lastRemovedSlot);   // consume: single level of undo
     insertPluginFromXml (std::move (slotXml), lastRemovedIndex);
+}
+
+void AudioEngine::dropGhostSlots()
+{
+    ghostSlots.clear();
 }
 
 void AudioEngine::clearChain()
@@ -219,6 +229,7 @@ void AudioEngine::clearChain()
     // Supersede any restore still instantiating plugins in the background so its
     // late callbacks don't push_back into the now-cleared chain.
     ++restoreGeneration;
+    ghostSlots.clear();
 
     while (! slots.empty())
         removePlugin ((int) slots.size() - 1);
@@ -234,6 +245,8 @@ void AudioEngine::movePlugin (int fromIndex, int toIndex)
 
     if (! juce::isPositiveAndBelow (fromIndex, (int) slots.size()) || fromIndex == toIndex)
         return;
+
+    dropGhostSlots();   // a structural edit
 
     auto slot = slots[(size_t) fromIndex];
     slots.erase (slots.begin() + fromIndex);
@@ -342,11 +355,28 @@ juce::String AudioEngine::setRedirectedApp (juce::uint32 pid, const juce::String
     if (! AppRouting::findCable (cable))
         return "No virtual cable was found. Open VIRTUAL CABLE to install one, then try again.";
 
+    // Record the recovery intent BEFORE applying the route: if we're force-killed in
+    // the tiny window between routing the app and persisting the session, the marker
+    // still lets the next launch undo it (otherwise the app is left silently playing
+    // into the cable). Delete it again if the route itself fails.
+    redirectMarkerFile().replaceWithText (exe);
+
     if (! AppRouting::routeAppOutput (pid, cable.renderDeviceId))
+    {
+        redirectMarkerFile().deleteFile();
         return "Couldn't redirect that app's audio output. Please try again.";
+    }
 
     applyRedirect (pid, exe, cable.captureName);
     return {};
+}
+
+bool AudioEngine::isRedirectedAppRunning() const
+{
+    if (redirectedApp.isEmpty())
+        return true;   // not redirecting — nothing to detect
+
+    return AppRouting::isProcessRunning (redirectedPid);
 }
 
 void AudioEngine::applyRedirect (juce::uint32 pid, const juce::String& exe,
@@ -403,13 +433,20 @@ void AudioEngine::cleanupStaleRedirect()
     const auto exe = marker.loadFileAsString().trim();
     marker.deleteFile();
 
+    if (exe.isEmpty())
+        return;
+
     // A previous run (possibly crashed) left this app routed into the cable. Restore
     // it to its normal output. loadSession re-applies the redirect afterwards if the
     // saved session still wants it (so a clean relaunch just re-wires the cable).
-    if (exe.isNotEmpty())
-        for (const auto& source : enumerateAudioSources())
-            if (source.executable.equalsIgnoreCase (exe))
-                AppRouting::clearAppOutput (source.pid);
+    //
+    // Clear precisely by executable while the app is running (the override is keyed to
+    // the app identity, so a fresh PID of the same exe clears it). If the app isn't
+    // running now we have no PID to target, so fall back to clearing ALL persisted
+    // per-app overrides — the recovery hammer that guarantees it isn't left silently
+    // routed into the cable the next time it launches.
+    if (! AppRouting::clearAppOutputByName (exe))
+        AppRouting::clearAllOverrides();
 }
 
 void AudioEngine::restoreRedirectFromSession (const juce::XmlElement& session)
@@ -586,12 +623,44 @@ std::unique_ptr<juce::XmlElement> AudioEngine::createSlotXml (int index) const
     return slotXml;
 }
 
-std::unique_ptr<juce::XmlElement> AudioEngine::createChainXml() const
+std::unique_ptr<juce::XmlElement> AudioEngine::createChainXml (bool includeGhosts) const
 {
     auto chain = std::make_unique<juce::XmlElement> ("CHAIN");
 
-    for (size_t i = 0; i < slots.size(); ++i)
-        chain->addChildElement (createSlotXml ((int) i).release());
+    // Fast path (the normal case): no retained failures, so just serialize the live
+    // chain exactly as before. Presets also take this path (includeGhosts = false) so
+    // a saved preset never carries a plugin that isn't actually in the chain.
+    if (! includeGhosts || ghostSlots.empty())
+    {
+        for (size_t i = 0; i < slots.size(); ++i)
+            chain->addChildElement (createSlotXml ((int) i).release());
+
+        return chain;
+    }
+
+    // Merge live slots with retained ghost slots back into the restored chain's original
+    // order: each ghost sits at its recorded original index; the live slots (still in
+    // original order, minus the ghosts) fill the remaining positions. This re-emits a
+    // transiently-missing plugin verbatim instead of overwriting it out of the session.
+    const int total = (int) slots.size() + (int) ghostSlots.size();
+    size_t liveIdx = 0;
+
+    for (int pos = 0; pos < total; ++pos)
+    {
+        const juce::XmlElement* ghost = nullptr;
+        for (const auto& g : ghostSlots)
+            if (g.originalIndex == pos) { ghost = g.xml.get(); break; }
+
+        if (ghost != nullptr)
+            chain->addChildElement (new juce::XmlElement (*ghost));
+        else if (liveIdx < slots.size())
+            chain->addChildElement (createSlotXml ((int) liveIdx++).release());
+    }
+
+    // Safety net: append any live slot not placed above (shouldn't happen while the
+    // no-structural-edit invariant holds, but never drop a real plugin).
+    while (liveIdx < slots.size())
+        chain->addChildElement (createSlotXml ((int) liveIdx++).release());
 
     return chain;
 }
@@ -658,7 +727,8 @@ juce::File AudioEngine::getPresetsDirectory() const
 bool AudioEngine::savePreset (const juce::File& presetFile)
 {
     presetFile.getParentDirectory().createDirectory();
-    return createChainXml()->writeTo (presetFile);
+    // A preset captures the live chain only — never a retained (missing) ghost slot.
+    return createChainXml (false)->writeTo (presetFile);
 }
 
 bool AudioEngine::loadPreset (const juce::File& presetFile)
@@ -683,6 +753,7 @@ bool AudioEngine::loadPreset (const juce::File& presetFile)
 void AudioEngine::loadSession()
 {
     ++restoreGeneration;   // supersede any restore already in flight
+    ghostSlots.clear();    // a fresh load starts with no retained failures
 
     // Undo any app→cable redirect a previous (possibly crashed) run left behind before
     // we re-open devices and re-apply the saved input.
@@ -778,6 +849,11 @@ void AudioEngine::restoreChainFromXml (std::shared_ptr<juce::XmlElement> chainXm
                                ? descriptionXml->getStringAttribute ("name", "Unknown plugin")
                                : "Unknown plugin");
 
+        // Retain the slot verbatim so a save can't delete it — a later launch (or JUCE
+        // version) may parse/instantiate it. Keyed by its original chain position.
+        if (slotXml != nullptr)
+            ghostSlots.push_back ({ slotIndex, std::make_unique<juce::XmlElement> (*slotXml) });
+
         restoreChainFromXml (chainXml, slotIndex + 1, failures, generation);
         return;
     }
@@ -820,6 +896,13 @@ void AudioEngine::restoreChainFromXml (std::shared_ptr<juce::XmlElement> chainXm
             else if (failures != nullptr)
             {
                 failures->add (description.name);
+
+                // The plugin exists in the known list but couldn't be instantiated right
+                // now (locked DLL, unmounted drive, one-off init failure). Keep its slot
+                // XML so the next save re-emits it and the next launch retries it, instead
+                // of permanently pruning it from the saved chain.
+                if (auto* sx = chainXml->getChildElement (slotIndex))
+                    self.ghostSlots.push_back ({ slotIndex, std::make_unique<juce::XmlElement> (*sx) });
             }
 
             self.restoreChainFromXml (chainXml, slotIndex + 1, failures, generation);

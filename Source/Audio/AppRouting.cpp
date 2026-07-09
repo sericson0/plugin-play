@@ -11,7 +11,9 @@
 #include <mmdeviceapi.h>
 #include <functiondiscoverykeys_devpkey.h>
 #include <wrl/client.h>
+#include <tlhelp32.h>
 #include <thread>
+#include <vector>
 
 // RoGetActivationFactory / WindowsCreateString live in the WinRT core (combase);
 // the import lib is runtimeobject.lib. The rest of WASAPI/COM is already linked.
@@ -120,19 +122,42 @@ static juce::String friendlyName (IMMDevice* device)
     return result;
 }
 
-// Returns the first active endpoint of the given flow whose friendly name contains
-// `needle` (case-insensitive), with its raw id and name.
-static bool findEndpoint (EDataFlow flow, const juce::String& needle,
-                          juce::String& idOut, juce::String& nameOut)
+struct Endpoint
 {
+    juce::String id;
+    juce::String name;
+    juce::String instanceKey;   // shared by a single cable's input + output endpoints
+};
+
+// A cable's playback ("CABLE Input …") and recording ("CABLE Output …") endpoints
+// share the same parenthetical driver name — e.g. both end in "(VB-Audio Virtual
+// Cable)". Keying on that lets us pair the two sides of the SAME cable even when
+// several cables (VB-CABLE A+B, multiple installs) are present, instead of blindly
+// taking the first "in" and first "out" which can come from different cables.
+static juce::String cableInstanceKey (const juce::String& name)
+{
+    const int open  = name.lastIndexOfChar ('(');
+    const int close = name.lastIndexOfChar (')');
+    if (open >= 0 && close > open)
+        return name.substring (open + 1, close).trim().toLowerCase();
+
+    return name.trim().toLowerCase();
+}
+
+// All active endpoints of the given flow whose friendly name looks like a virtual
+// cable (contains "cable"). Each carries its raw id and instance key.
+static std::vector<Endpoint> collectCableEndpoints (EDataFlow flow)
+{
+    std::vector<Endpoint> out;
+
     ComPtr<IMMDeviceEnumerator> en;
     if (FAILED (CoCreateInstance (__uuidof (MMDeviceEnumerator), nullptr, CLSCTX_ALL,
                                   IID_PPV_ARGS (en.GetAddressOf()))))
-        return false;
+        return out;
 
     ComPtr<IMMDeviceCollection> coll;
     if (FAILED (en->EnumAudioEndpoints (flow, DEVICE_STATE_ACTIVE, coll.GetAddressOf())))
-        return false;
+        return out;
 
     UINT count = 0;
     coll->GetCount (&count);
@@ -144,20 +169,18 @@ static bool findEndpoint (EDataFlow flow, const juce::String& needle,
             continue;
 
         const auto name = friendlyName (device.Get());
-        if (name.containsIgnoreCase (needle))
+        if (! name.containsIgnoreCase ("cable"))
+            continue;
+
+        LPWSTR id = nullptr;
+        if (SUCCEEDED (device->GetId (&id)) && id != nullptr)
         {
-            LPWSTR id = nullptr;
-            if (SUCCEEDED (device->GetId (&id)) && id != nullptr)
-            {
-                idOut   = juce::String (id);
-                nameOut = name;
-                CoTaskMemFree (id);
-                return true;
-            }
+            out.push_back ({ juce::String (id), name, cableInstanceKey (name) });
+            CoTaskMemFree (id);
         }
     }
 
-    return false;
+    return out;
 }
 
 //==============================================================================
@@ -170,20 +193,49 @@ bool findCable (CablePair& out)
 {
     return runOnMta ([&]
     {
-        juce::String renderId, renderName, captureId, captureName;
+        // A cable's playback endpoint ("CABLE Input …" / "CABLE In 16 Ch …") is a
+        // render device; its recording endpoint ("CABLE Output …") is a capture
+        // device. Collect both sides, then pair by shared instance so we don't wire
+        // audio into one cable and try to read it back off another.
+        const auto renders  = collectCableEndpoints (eRender);
+        const auto captures = collectCableEndpoints (eCapture);
 
-        // VB-CABLE exposes "CABLE Input*" (playback) paired with "CABLE Output*"
-        // (recording). Match the "in"/"out" tokens so renamed variants (e.g. the
-        // user's "CABLE In 16 Ch") still pair up.
-        const bool haveRender  = findEndpoint (eRender,  "cable in",  renderId,  renderName);
-        const bool haveCapture = findEndpoint (eCapture, "cable out", captureId, captureName);
-
-        if (! (haveRender && haveCapture))
+        if (renders.empty() || captures.empty())
             return false;
 
-        out.renderDeviceId = renderId;
-        out.renderName     = renderName;
-        out.captureName    = captureName;
+        auto looksLikeInput  = [] (const juce::String& n) { return n.containsIgnoreCase ("in"); };
+        auto looksLikeOutput = [] (const juce::String& n) { return n.containsIgnoreCase ("out"); };
+
+        const Endpoint* bestRender  = nullptr;
+        const Endpoint* bestCapture = nullptr;
+
+        // Best: a render+capture pair from the same cable instance, with the expected
+        // in/out naming. Fall back to any same-instance pair, then to first-of-each.
+        for (const auto& r : renders)
+        {
+            for (const auto& c : captures)
+            {
+                if (r.instanceKey != c.instanceKey)
+                    continue;
+
+                if (looksLikeInput (r.name) && looksLikeOutput (c.name))
+                {
+                    bestRender = &r; bestCapture = &c;
+                    break;
+                }
+
+                if (bestRender == nullptr) { bestRender = &r; bestCapture = &c; }
+            }
+
+            if (bestRender != nullptr && looksLikeInput (bestRender->name))
+                break;
+        }
+
+        if (bestRender == nullptr) { bestRender = &renders.front(); bestCapture = &captures.front(); }
+
+        out.renderDeviceId = bestRender->id;
+        out.renderName     = bestRender->name;
+        out.captureName    = bestCapture->name;
         return true;
     });
 }
@@ -202,7 +254,8 @@ bool routeAppOutput (juce::uint32 pid, const juce::String& renderDeviceId)
         const auto swd = juce::String (kMmdevapiToken) + renderDeviceId + juce::String (kRenderSuffix);
 
         HSTRING dev = nullptr;
-        if (FAILED (WindowsCreateString (swd.toWideCharPointer(), (UINT32) swd.length(), &dev)))
+        const auto* swdW = swd.toWideCharPointer();
+        if (FAILED (WindowsCreateString (swdW, (UINT32) wcslen (swdW), &dev)))
             return false;
 
         HRESULT a = cfg->SetPersistedDefaultAudioEndpoint ((DWORD) pid, eRender, eConsole,    dev);
@@ -228,6 +281,87 @@ bool clearAppOutput (juce::uint32 pid)
     });
 }
 
+static std::vector<DWORD> processIdsForExe (const juce::String& exe)
+{
+    std::vector<DWORD> pids;
+
+    HANDLE snapshot = CreateToolhelp32Snapshot (TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE)
+        return pids;
+
+    PROCESSENTRY32W entry {};
+    entry.dwSize = sizeof (entry);
+
+    if (Process32FirstW (snapshot, &entry))
+    {
+        do
+        {
+            if (exe.equalsIgnoreCase (juce::String (entry.szExeFile)))
+                pids.push_back (entry.th32ProcessID);
+        }
+        while (Process32NextW (snapshot, &entry));
+    }
+
+    CloseHandle (snapshot);
+    return pids;
+}
+
+bool clearAppOutputByName (const juce::String& exe)
+{
+    if (exe.isEmpty())
+        return false;
+
+    const auto pids = processIdsForExe (exe);
+    if (pids.empty())
+        return false;
+
+    return runOnMta ([&]
+    {
+        auto cfg = getPolicyConfig();
+        if (cfg == nullptr)
+            return false;
+
+        bool any = false;
+        for (auto pid : pids)
+        {
+            HRESULT a = cfg->SetPersistedDefaultAudioEndpoint (pid, eRender, eConsole,    nullptr);
+            HRESULT b = cfg->SetPersistedDefaultAudioEndpoint (pid, eRender, eMultimedia, nullptr);
+            any = any || (SUCCEEDED (a) && SUCCEEDED (b));
+        }
+        return any;
+    });
+}
+
+bool clearAllOverrides()
+{
+    return runOnMta ([&]
+    {
+        auto cfg = getPolicyConfig();
+        if (cfg == nullptr)
+            return false;
+
+        return (bool) SUCCEEDED (cfg->ClearAllPersistedApplicationDefaultEndpoints());
+    });
+}
+
+bool isProcessRunning (juce::uint32 pid)
+{
+    if (pid == 0)
+        return false;
+
+    // Plain Win32 (no WinRT), so no MTA worker needed. QUERY_LIMITED_INFORMATION is
+    // accessible across integrity levels; WaitForSingleObject(0) distinguishes a live
+    // process (WAIT_TIMEOUT) from an exited one (WAIT_OBJECT_0) without the STILL_ACTIVE
+    // exit-code ambiguity.
+    HANDLE h = OpenProcess (SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD) pid);
+    if (h == nullptr)
+        return false;
+
+    const DWORD state = WaitForSingleObject (h, 0);
+    CloseHandle (h);
+    return state == WAIT_TIMEOUT;
+}
+
 } // namespace play::AppRouting
 
 #else //=========================================================================
@@ -238,6 +372,9 @@ namespace play::AppRouting
     bool findCable (CablePair&)                               { return false; }
     bool routeAppOutput (juce::uint32, const juce::String&)   { return false; }
     bool clearAppOutput (juce::uint32)                        { return false; }
+    bool clearAppOutputByName (const juce::String&)           { return false; }
+    bool clearAllOverrides()                                  { return false; }
+    bool isProcessRunning (juce::uint32)                      { return false; }
 }
 
 #endif

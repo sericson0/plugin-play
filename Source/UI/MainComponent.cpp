@@ -638,6 +638,14 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
     cpuLabel.setTooltip ("Audio processing load - amber over 60%, red over 85%");
     addAndMakeVisible (cpuLabel);
 
+    // Redirect banner: hidden until an app is being routed through Plugin Play. Added
+    // (not made visible) so updateRedirectBanner() controls visibility + layout.
+    redirectBanner.setJustificationType (juce::Justification::centred);
+    redirectBanner.setFont (juce::Font (juce::FontOptions (13.0f, juce::Font::bold)));
+    redirectBanner.setTooltip ("Plugin Play is routing this app's audio through the effect chain. "
+                               "Choose a different input to stop.");
+    addChildComponent (redirectBanner);
+
     engine.addChangeListener (this);
     scanner.addChangeListener (this);
 
@@ -659,6 +667,7 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
     setSize (720, 700);
     buildDeviceSelectors();
     updateStatusText();
+    updateRedirectBanner();
 }
 
 MainComponent::~MainComponent()
@@ -747,6 +756,10 @@ void MainComponent::resized()
     helpButton.setBounds (header.removeFromRight (64));
     header.removeFromRight (8);
     cableButton.setBounds (header.removeFromRight (124));
+
+    // Redirect banner strip (only takes space while shown), between header + meters.
+    if (bannerShown)
+        redirectBanner.setBounds (area.removeFromTop (28));
 
     // Meter row: IN meter | FX kill switch | OUT meter | LIMITER.
     auto meterRow = area.removeFromTop (40).reduced (16, 6);
@@ -866,6 +879,7 @@ void MainComponent::changeListenerCallback (juce::ChangeBroadcaster* source)
     updateKillButton();
     updateLimiterButton();
     updateStatusText();
+    updateRedirectBanner();
 }
 
 void MainComponent::timerCallback()
@@ -875,10 +889,18 @@ void MainComponent::timerCallback()
     inputMeter.pushLevels (inL, inR);
     outputMeter.pushLevels (engine.readOutputPeak (0), engine.readOutputPeak (1));
 
+    // Count down a transient "<app> closed" notice; refresh the banner when it expires.
+    if (redirectNoticeTicks > 0 && --redirectNoticeTicks == 0)
+    {
+        redirectNotice.clear();
+        updateRedirectBanner();
+    }
+
     if (++timerTicks % 30 == 0)
     {
         updateStatusText();
-        checkSampleRate();   // the source's rate can change while we're running
+        checkSampleRate();          // the source's rate can change while we're running
+        checkRedirectedAppAlive();   // notice the routed app quitting (would go silent)
     }
 }
 
@@ -982,6 +1004,13 @@ void MainComponent::addScanFolder()
 
 void MainComponent::showHelp()
 {
+    // Already open: bring it forward rather than stacking another identical window.
+    if (helpWindow != nullptr)
+    {
+        helpWindow->toFront (true);
+        return;
+    }
+
     auto content = std::make_unique<HelpContent>();
 
     juce::DialogWindow::LaunchOptions options;
@@ -993,7 +1022,10 @@ void MainComponent::showHelp()
     options.resizable = true;
 
     if (auto* window = options.launchAsync())
+    {
         applyDarkTitleBar (*window);
+        helpWindow = window;
+    }
 }
 
 //==============================================================================
@@ -1711,6 +1743,56 @@ void MainComponent::updateStatusText()
 
     statusLabel.setText (text, juce::dontSendNotification);
     cpuLabel.setText (cpuText, juce::dontSendNotification);
+}
+
+void MainComponent::updateRedirectBanner()
+{
+    juce::String text;
+    juce::Colour bg;
+    bool show = false;
+
+    if (redirectNotice.isNotEmpty())
+    {
+        // Transient notice (e.g. the routed app just closed).
+        text = redirectNotice;
+        bg   = metricWarn;
+        show = true;
+    }
+    else if (engine.isRedirectingApp())
+    {
+        // Persistent "we're routing this app" indicator. \xe2\x96\xb6 = ▶, \xc2\xb7 = ·
+        text << "\xe2\x96\xb6  Sending " << engine.redirectedAppName()
+             << " through Plugin Play   \xc2\xb7   pick another input to stop";
+        bg   = accent;
+        show = true;
+    }
+
+    redirectBanner.setText (text, juce::dontSendNotification);
+    redirectBanner.setColour (juce::Label::backgroundColourId, bg);
+    redirectBanner.setColour (juce::Label::textColourId, background);   // dark text on the bright strip
+
+    if (show != bannerShown)
+    {
+        bannerShown = show;
+        redirectBanner.setVisible (show);
+        resized();   // reclaim / reserve the band
+    }
+}
+
+void MainComponent::checkRedirectedAppAlive()
+{
+    if (! engine.isRedirectingApp() || engine.isRedirectedAppRunning())
+        return;
+
+    // The app we were routing has exited; audio would otherwise just go silent with a
+    // stale selection. Stop routing (restores the app's own output) and tell the user.
+    const auto app = engine.redirectedAppName();
+    engine.clearRedirectedApp();
+    buildDeviceSelectors();
+
+    redirectNotice     = app + " closed \xe2\x80\x94 stopped routing it. Pick an input to continue.";
+    redirectNoticeTicks = 30 * 6;   // ~6 seconds at 30 Hz
+    updateRedirectBanner();
 }
 
 } // namespace play

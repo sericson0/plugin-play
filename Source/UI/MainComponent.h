@@ -127,6 +127,11 @@ private:
     void updateStatusText();
     void updateScanButton();
 
+    // Redirect banner: a coloured strip shown while an app is being routed through
+    // Plugin Play, and briefly repurposed as a notice when that app quits.
+    void updateRedirectBanner();
+    void checkRedirectedAppAlive();
+
     // Collapsible audio device area: collapsed keeps the input/output device
     // selectors; expanded adds channel selection plus driver / rate / buffer.
     void setAudioExpanded (bool shouldExpand);
@@ -201,6 +206,18 @@ private:
 
     juce::Label statusLabel;
     juce::Label cpuLabel;   // right-aligned CPU readout, tinted amber/red under load
+
+    // Banner strip shown above the meters while redirecting an app (and, for a few
+    // seconds, when that app quits). bannerShown drives layout so the band only takes
+    // vertical space when it's up.
+    juce::Label redirectBanner;
+    bool bannerShown = false;
+    juce::String redirectNotice;   // transient "<app> closed" message; empty = none
+    int redirectNoticeTicks = 0;   // 30 Hz ticks remaining to show the notice
+
+    // Kept so a second HELP click brings the existing window to front instead of
+    // stacking a duplicate. Null once the window closes (it self-deletes).
+    juce::Component::SafePointer<juce::DialogWindow> helpWindow;
 
     std::map<juce::uint32, std::unique_ptr<PluginWindow>> pluginWindows;
 
