@@ -716,7 +716,9 @@ std::unique_ptr<juce::XmlElement> AudioEngine::createChainXml (bool includeGhost
 
 void AudioEngine::saveSession()
 {
-    if (restoringSession)
+    // Never save before loadSession has run (startup defers it until after the first
+    // paint) — saving then would overwrite the on-disk session with an empty one.
+    if (restoringSession || ! sessionLoaded)
         return;
 
     juce::XmlElement session ("SESSION");
@@ -801,6 +803,7 @@ bool AudioEngine::loadPreset (const juce::File& presetFile)
 
 void AudioEngine::loadSession()
 {
+    sessionLoaded = true;  // saves (incl. the shutdown save) are meaningful from here on
     ++restoreGeneration;   // supersede any restore already in flight
     ghostSlots.clear();    // a fresh load starts with no retained failures
 

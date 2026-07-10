@@ -37,8 +37,8 @@ be **VST3** format.
 4. Play. The built-in safety **LIMITER** guards your speakers; **FX ON/OFF** is the
    master kill switch.
 
-The **HELP** button in the app covers all of this in more depth, and **GUIDE**
-replays the first-run walkthrough.
+The **HELP** button in the app covers all of this in more depth, and its **GUIDE**
+button replays the first-run walkthrough.
 
 ## Building from source
 

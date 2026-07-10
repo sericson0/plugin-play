@@ -228,6 +228,9 @@ private:
     std::atomic<float> outputPeaks[2] { 0.0f, 0.0f };
 
     bool restoringSession = false;
+    // False until loadSession() runs (startup defers it past the first paint); gates
+    // every save so an early exit can't replace the saved session with an empty one.
+    bool sessionLoaded = false;
     bool masterBypassed = false;
     bool limiterEnabled = true;
 

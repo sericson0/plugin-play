@@ -158,7 +158,6 @@ private:
 
     juce::TextButton scanButton       { "SCAN PLUGINS" };
     juce::TextButton cableButton      { "VIRTUAL CABLE" };
-    juce::TextButton guideButton      { "GUIDE" };
     juce::TextButton donateButton     { "DONATE" };
     juce::TextButton helpButton       { "HELP" };
     juce::TextButton presetsButton    { "PRESETS" };

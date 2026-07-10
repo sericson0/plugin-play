@@ -109,12 +109,13 @@ void WelcomePopup::loadStepContent()
     {
         StepContent s;
         s.title = "Add your effects";
-        s.lines.add ({ "Your VST3 effects are found automatically; run SCAN PLUGINS" });
-        s.lines.add ({ "again after installing new plugins.", false, true });
         s.lines.add ({ "+ Add Plugin builds the chain - audio flows top to bottom." });
-        s.lines.add ({ "Drag cards to reorder; ON/OFF bypasses a single effect." });
-        s.lines.add ({ "OPEN (or double-click a card) shows the plugin's own window." });
-        s.lines.add ({ "X removes an effect - Ctrl+Z brings it back." });
+        s.lines.add ({ "Drag cards by their grip dots to reorder. Each card's buttons:" });
+        s.lines.add ({ "ON / OFF - turn that one effect on or off (bypass)." });
+        s.lines.add ({ "OPEN - the plugin's own window (or double-click the card)." });
+        s.lines.add ({ "FLOAT - keep that window on top of your DJ software." });
+        s.lines.add ({ "X - remove the effect; Ctrl+Z brings it back." });
+        s.lines.add ({ "Run SCAN PLUGINS after installing new plugins." });
         steps_.add (s);
     }
     {
@@ -130,6 +131,7 @@ void WelcomePopup::loadStepContent()
         StepContent s;
         s.title = "You're all set";
         s.lines.add ({ "Hover any control for a tooltip; HELP covers everything else." });
+        s.lines.add ({ "Replay this guide any time - GUIDE, top right inside HELP." });
         s.lines.add ({ "Plugin Play is free and open source, supported by tips." });
         s.lines.add ({ "If it helps your sets, hit SUPPORT below. Thank you!" });
         steps_.add (s);

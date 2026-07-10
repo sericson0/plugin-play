@@ -61,14 +61,26 @@ public:
         scanner = std::make_unique<play::PluginScanner> (engine->formatManager,
                                                          *appProperties.getUserSettings());
 
-        engine->loadSession();
-
         mainWindow = std::make_unique<MainWindow> (getApplicationName(), *engine, *scanner,
                                                    *appProperties.getUserSettings());
 
-        // First run: populate the plugin list automatically.
-        if (scanner->knownPlugins.getTypes().isEmpty())
-            scanner->startScan();
+        // Defer the heavy startup work — scanning/opening the audio device and
+        // re-creating the saved plugin chain (each VST3 loads its DLL on the message
+        // thread) — until after the window's first paint, so the app appears
+        // immediately instead of after seconds of silent loading. A plain posted
+        // callback would still run before the first paint (Windows only delivers
+        // WM_PAINT once the message queue is idle), hence the short timer.
+        juce::Timer::callAfterDelay (100, [this]
+        {
+            if (engine == nullptr)
+                return;
+
+            engine->loadSession();
+
+            // First run: populate the plugin list automatically.
+            if (scanner->knownPlugins.getTypes().isEmpty())
+                scanner->startScan();
+        });
     }
 
     void shutdown() override
