@@ -81,56 +81,57 @@ void WelcomePopup::loadStepContent()
 
     {
         StepContent s;
-        s.title = "Welcome to Plugin Play";
-        s.lines.add ({ "Plugin Play adds VST3 effects to your music in real time.", false });
-        s.lines.add ({ "Your DJ software or any app plays in, passes through your", false });
-        s.lines.add ({ "chain of effects, and comes out your speakers.", false });
-        s.lines.add ({ "Nothing is changed on disk - it is all live.", false });
+        s.title = "Welcome!";
+        s.lines.add ({ "Plugin Play runs your music through VST3 effects, live." });
+        s.lines.add ({ "Any app plays in - your DJ software, Spotify, anything." });
+        s.lines.add ({ "The processed sound comes out your speakers." });
+        s.lines.add ({ "Your tracks on disk are never changed." });
         steps_.add (s);
     }
     {
         StepContent s;
         s.title = "Set up a virtual cable";
-        s.lines.add ({ "Plugin Play needs your audio as an input. A virtual cable is a", false });
-        s.lines.add ({ "software 'wire' that carries sound between apps.", false });
-        s.lines.add ({ "Click VIRTUAL CABLE in the header to install VB-CABLE - it", false });
-        s.lines.add ({ "walks you through a one-click download, then a reboot.", false });
+        s.lines.add ({ "A virtual cable is a software wire that carries sound" });
+        s.lines.add ({ "between apps - it's how your music reaches Plugin Play.", false, true });
+        s.lines.add ({ "Click VIRTUAL CABLE in the header for a guided install." });
+        s.lines.add ({ "One quick download and a reboot - that's it." });
         steps_.add (s);
     }
     {
         StepContent s;
         s.title = "Choose your input";
-        s.lines.add ({ "Easiest: open the INPUT dropdown and pick an app under", false });
-        s.lines.add ({ "'Send an app through Plugin Play' - it routes that app for you.", false });
-        s.lines.add ({ "Or route manually: set your DJ software's output to the cable,", false });
-        s.lines.add ({ "then set INPUT to the cable and OUTPUT to your speakers.", false });
+        s.lines.add ({ "Easiest: open the INPUT dropdown and pick a running app." });
+        s.lines.add ({ "Plugin Play routes that app through the cable for you." });
+        s.lines.add ({ "Prefer manual routing? Set your DJ software's output to the" });
+        s.lines.add ({ "cable, then INPUT to the cable and OUTPUT to your speakers.", false, true });
         steps_.add (s);
     }
     {
         StepContent s;
         s.title = "Add your effects";
-        s.lines.add ({ "Click SCAN PLUGINS once to find your installed VST3 effects.", false });
-        s.lines.add ({ "Use + Add Plugin to build the chain; audio flows top to bottom.", false });
-        s.lines.add ({ "Drag cards to reorder, ON/OFF to bypass, OPEN for a plugin's GUI.", false });
-        s.lines.add ({ "X removes an effect - Ctrl+Z brings it back.", false });
+        s.lines.add ({ "Your VST3 effects are found automatically; run SCAN PLUGINS" });
+        s.lines.add ({ "again after installing new plugins.", false, true });
+        s.lines.add ({ "+ Add Plugin builds the chain - audio flows top to bottom." });
+        s.lines.add ({ "Drag cards to reorder; ON/OFF bypasses a single effect." });
+        s.lines.add ({ "OPEN (or double-click a card) shows the plugin's own window." });
+        s.lines.add ({ "X removes an effect - Ctrl+Z brings it back." });
         steps_.add (s);
     }
     {
         StepContent s;
         s.title = "Master controls & presets";
-        s.lines.add ({ "FX ON/OFF above the meters bypasses every effect at once.", false });
-        s.lines.add ({ "LIMITER is a safety brickwall on the output - leave it on to", false });
-        s.lines.add ({ "protect your speakers from a runaway plugin level.", false });
-        s.lines.add ({ "Click a meter to reset its clip light. Save chains from PRESETS.", false });
+        s.lines.add ({ "FX ON/OFF above the meters bypasses every effect at once." });
+        s.lines.add ({ "LIMITER guards your speakers from runaway levels - leave it on." });
+        s.lines.add ({ "Click a meter to reset its clip light." });
+        s.lines.add ({ "Save chains you like from the PRESETS menu." });
         steps_.add (s);
     }
     {
         StepContent s;
         s.title = "You're all set";
-        s.lines.add ({ "Hover any control for a tooltip, and open HELP any time for", false });
-        s.lines.add ({ "full documentation and troubleshooting.", false });
-        s.lines.add ({ "Plugin Play is free and open source. If it helps your sets,", false });
-        s.lines.add ({ "please consider a tip - hit SUPPORT below. Thank you!", false });
+        s.lines.add ({ "Hover any control for a tooltip; HELP covers everything else." });
+        s.lines.add ({ "Plugin Play is free and open source, supported by tips." });
+        s.lines.add ({ "If it helps your sets, hit SUPPORT below. Thank you!" });
         steps_.add (s);
     }
 }
@@ -183,13 +184,14 @@ void WelcomePopup::paint (juce::Graphics& g)
 {
     g.fillAll (background);
 
-    // Bullet points beside each non-warning body line.
+    // Bullet points beside each body line, except warnings and continuation
+    // lines (a wrapped sentence must not look like two separate bullets).
     g.setColour (accent);
     g.setFont (juce::Font (juce::FontOptions (14.0f)));
     for (int i = 0; i < bodyLines_.size(); ++i)
     {
         const auto& line = steps_.getReference (currentStep_).lines.getReference (i);
-        if (line.warn)
+        if (line.warn || line.cont)
             continue;
 
         auto b = bodyLines_.getUnchecked (i)->getBounds();

@@ -162,18 +162,19 @@ private:
                  "device. Nothing is added to your tracks on disk - it is all live.");
 
         addHeading ("GETTING STARTED");
-        addBody ("1.  VIRTUAL CABLE - set up the audio route from your DJ software\n"
-                 "     into Plugin Play. See the Virtual Cable tab.\n"
-                 "2.  AUDIO SETTINGS - choose your input and output devices. See the\n"
-                 "     Audio Settings tab.\n"
-                 "3.  SCAN PLUGINS - find the VST3 effects on your system, then add\n"
-                 "     them to the chain. See the Plugins tab.");
+        addBody ("1.  VIRTUAL CABLE - install the software 'wire' that carries\n"
+                 "     your music into Plugin Play. See the Virtual Cable tab.\n"
+                 "2.  INPUT & OUTPUT - pick an app (easiest) or a device as the\n"
+                 "     input, and your speakers as the output. See Audio Settings.\n"
+                 "3.  ADD EFFECTS - your VST3 plugins are scanned automatically;\n"
+                 "     click + Add Plugin to build the chain. See the Plugins tab.");
 
         addHeading ("TIPS");
         addBody ("- Hover over any control for a tooltip that explains it.\n"
                  "- Save a chain you like as a preset from the PRESETS menu.\n"
                  "- The LIMITER guards your speakers - leave it on unless you\n"
-                 "   already have your own limiter at the end of the chain.");
+                 "   already have your own limiter at the end of the chain.\n"
+                 "- The GUIDE button replays the first-run walkthrough.");
 
         addHeading ("CONTACT");
         addBody ("For questions, suggestions or bug reports, email "
@@ -182,7 +183,7 @@ private:
         addHeading ("SUPPORT PLUGIN PLAY");
         addBody ("Plugin Play is free and open source. If it helps your sets, please "
                  "consider a tip via the DONATE button in the header (Card / Apple Pay, "
-                 "Venmo or Zelle). New here? The GUIDE button reopens the walkthrough.");
+                 "Venmo or Zelle).");
     }
 
     void populateVirtualCable()
@@ -208,12 +209,10 @@ private:
                  "or interface.");
 
         addHeading ("WITHOUT A VIRTUAL CABLE");
-        addBody ("You don't need VB-CABLE if you already have another way to feed "
-                 "your DJ audio back as an input. If your audio interface offers "
-                 "hardware loopback, or your DJ software can output to a device you "
-                 "can also select as an input, set Plugin Play's INPUT to that "
-                 "source and skip the install. A virtual cable is simply the easiest "
-                 "route if you don't already have one.");
+        addBody ("Already have a way to loop audio back as an input - hardware "
+                 "loopback on your audio interface, for example? Set Plugin Play's "
+                 "INPUT to that source and skip the install. The cable is simply "
+                 "the easiest route if you don't have one.");
 
         addHeading ("NOTES");
         addBody ("- VB-CABLE is a free download from vb-audio.com. Plugin Play\n"
@@ -230,14 +229,12 @@ private:
                  "software) and OUTPUT to your speakers or audio interface.");
 
         addHeading ("SENDING AN APP THROUGH PLUGIN PLAY");
-        addBody ("The INPUT dropdown also lists the apps currently playing audio, under "
-                 "'Send an app through Plugin Play'. Pick one (e.g. Spotify) and Plugin "
-                 "Play routes that app's output into the virtual cable and reads it back "
-                 "for you - no need to open Windows sound settings. Its processed audio "
-                 "comes out your normal OUTPUT device, so you can keep using one pair of "
-                 "speakers. This needs a virtual cable installed (see the Virtual Cable "
-                 "tab); Plugin Play restores the app's sound to normal when you switch "
-                 "away or close it.");
+        addBody ("The INPUT dropdown also lists running apps, under 'Send an app "
+                 "through Plugin Play'. Pick one (e.g. Spotify) and Plugin Play routes "
+                 "it through the virtual cable for you - nothing to change in Windows, "
+                 "and your OUTPUT stays on your normal speakers. Needs a cable "
+                 "installed (see the Virtual Cable tab). The app's sound returns to "
+                 "normal when you switch away or quit.");
 
         addHeading ("EXPANDING THE PANEL");
         addBody ("Use the expand toggle to reveal the advanced controls:\n"
@@ -265,10 +262,10 @@ private:
     void populatePlugins()
     {
         addHeading ("SCANNING FOR PLUGINS");
-        addBody ("Click SCAN PLUGINS to find the VST3 effects installed on your "
-                 "system. Run it once, and again after installing new plugins. The "
-                 "menu also lets you add or remove extra folders to search if you "
-                 "keep VST3s outside the standard locations.");
+        addBody ("Your VST3 effects are scanned automatically on first launch. Run "
+                 "SCAN PLUGINS again after installing new plugins, or use its menu "
+                 "to add extra folders if you keep VST3s outside the standard "
+                 "locations.");
 
         addHeading ("BUILDING A CHAIN");
         addBody ("+ Add Plugin appends an effect to the end of the chain. Audio "
@@ -299,14 +296,19 @@ private:
     {
         addHeading ("NO SOUND AT ALL");
         addBody ("- Check OUTPUT is set to the right device and press TEST OUTPUT.\n"
-                 "- Check FX ON is showing (not OFF) and the master isn't bypassed.\n"
-                 "- Make sure your DJ software is actually playing.");
+                 "- Make sure your DJ software is actually playing.\n"
+                 "- If the IN meter isn't moving either, see the next section.");
 
         addHeading ("NO INPUT / METERS NOT MOVING");
         addBody ("- Confirm your DJ software's output is set to the virtual cable.\n"
                  "- Confirm Plugin Play's INPUT is the matching cable output.\n"
                  "- Make sure the DJ software's output volume isn't turned down\n"
                  "   too low.");
+
+        addHeading ("EFFECTS AREN'T CHANGING THE SOUND");
+        addBody ("- Check the master button reads FX ON, not FX OFF.\n"
+                 "- Check the effect's own ON / OFF button on its card.\n"
+                 "- Open the plugin - its own mix or bypass may be the culprit.");
 
         addHeading ("A PLUGIN DOESN'T APPEAR");
         addBody ("- Run SCAN PLUGINS again; use the menu to add its folder if it\n"

@@ -26,16 +26,13 @@ be **VST3** format.
 
 ## Quick start
 
-1. **SCAN PLUGINS** — finds the VST3 effects installed on your PC (runs
-   automatically on first launch).
+1. **SCAN PLUGINS** — finds your VST3 effects (runs automatically on first launch).
 2. Set your input, either way:
-   - **Send an app through Plugin Play** *(easiest)* — open the INPUT dropdown and
-     pick a running app (e.g. Spotify or VirtualDJ). Plugin Play routes that app's
-     audio through the virtual cable for you — no Windows settings to touch. Your
-     OUTPUT stays on your normal speakers.
-   - **Manual cable routing** — in your DJ software set the master output to the
-     cable device (e.g. "CABLE Input"), then set Plugin Play's INPUT to the cable's
-     capture side (e.g. "CABLE Output") and OUTPUT to your sound card.
+   - **Send an app through Plugin Play** *(easiest)* — pick a running app (Spotify,
+     VirtualDJ, …) in the INPUT dropdown. Plugin Play routes it through the cable
+     for you — no Windows settings to touch — and OUTPUT stays on your speakers.
+   - **Manual cable routing** — set your DJ software's output to "CABLE Input",
+     then Plugin Play's INPUT to "CABLE Output" and OUTPUT to your sound card.
 3. **+ Add Plugin** — build your chain, drag to reorder, open each plugin's own GUI.
 4. Play. The built-in safety **LIMITER** guards your speakers; **FX ON/OFF** is the
    master kill switch.

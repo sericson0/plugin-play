@@ -32,6 +32,7 @@ private:
     {
         juce::String text;
         bool warn = false;
+        bool cont = false;   // continuation of the previous line: no bullet
     };
 
     struct StepContent
