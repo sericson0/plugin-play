@@ -2,7 +2,7 @@
 # Licensed under the GNU General Public License v3.0 (see LICENSE). Uses JUCE and
 # the Steinberg VST3 SDK under their GPLv3 grants (see THIRD_PARTY_NOTICES.md).
 cmake_minimum_required(VERSION 3.22)
-project(PluginPlay VERSION 0.1.0 LANGUAGES CXX C)
+project(PluginPlay VERSION 1.0.0 LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -32,6 +32,10 @@ juce_add_gui_app(PluginPlay
     COMPANY_NAME  "Plugin Play"
     BUNDLE_ID     "com.pluginplay.app"
     ICON_BIG      "${CMAKE_SOURCE_DIR}/Resources/exe_logo.png"
+    # Centre-cropped variant for the small (16/32 px) icon entries, so the play
+    # triangle stays legible in the taskbar/title bar instead of the whole frame
+    # shrinking to a smudge.
+    ICON_SMALL    "${CMAKE_SOURCE_DIR}/Resources/exe_logo_small.png"
 )
 
 juce_generate_juce_header(PluginPlay)

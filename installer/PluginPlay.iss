@@ -14,10 +14,11 @@
 ; produced installer + app afterwards with signtool.exe.
 
 #define AppName        "Plugin Play"
-#define AppVersion     "0.1.0"
+#define AppVersion     "1.0.0"
 #define AppPublisher   "Plugin Play"
 #define AppExeName     "Plugin Play.exe"
 #define AppId          "{{7B2C9F4E-3A1D-4E8B-9C6F-2D5A8E1B4C70}"
+#define AppContact     "TangoToolkit@gmail.com"
 
 ; Where the Release build put the exe (relative to this script).
 #ifndef SourceDir
@@ -33,9 +34,13 @@ AppId={#AppId}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher={#AppPublisher}
-AppSupportURL=https://vb-audio.com/Cable/
+AppContact={#AppContact}
+AppSupportURL=mailto:{#AppContact}
+VersionInfoVersion={#AppVersion}
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
+SetupIconFile=..\Resources\app_icon.ico
+UninstallDisplayName={#AppName}
 UninstallDisplayIcon={app}\{#AppExeName}
 OutputDir=Output
 OutputBaseFilename=PluginPlay-{#AppVersion}-Setup
@@ -46,8 +51,14 @@ WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
+; Windows 10 May 2020 Update (build 19041) or later - matches the audio APIs the
+; app relies on (per-app routing needs 21H2+; the app falls back gracefully).
+MinVersion=10.0.19041
 LicenseFile=..\LICENSE
 DisableProgramGroupPage=yes
+; If Plugin Play is running during an install/upgrade, ask Windows to close it
+; cleanly (a clean quit restores any app-to-cable routing it holds).
+CloseApplications=yes
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -69,6 +80,12 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: deskto
 
 [Run]
 Filename: "{app}\{#AppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(AppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+
+[UninstallRun]
+; Safety net: if a crashed run left another app's audio routed into the virtual
+; cable, restore it before Plugin Play's exe disappears for good. Headless - the
+; app performs the cleanup and quits without showing a window.
+Filename: "{app}\{#AppExeName}"; Parameters: "--cleanup-redirects"; Flags: runhidden waituntilterminated; RunOnceId: "CleanupRedirects"
 
 [Code]
 var

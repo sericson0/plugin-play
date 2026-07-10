@@ -1,5 +1,6 @@
 #include <JuceHeader.h>
 #include "Theme.h"
+#include "Audio/AppRouting.h"
 #include "Audio/AudioEngine.h"
 #include "Plugins/PluginScanner.h"
 #include "UI/MainComponent.h"
@@ -9,11 +10,44 @@ class PluginPlayApplication : public juce::JUCEApplication
 {
 public:
     const juce::String getApplicationName() override    { return "Plugin Play"; }
-    const juce::String getApplicationVersion() override { return "0.1.0"; }
-    bool moreThanOneInstanceAllowed() override          { return false; }
-
-    void initialise (const juce::String&) override
+    // Single source of truth: the version set in CMakeLists (project VERSION),
+    // which also stamps the exe's Windows version resource and the installer.
+    const juce::String getApplicationVersion() override { return JUCE_APPLICATION_VERSION_STRING; }
+    bool moreThanOneInstanceAllowed() override
     {
+        // Single-instance for normal launches. The uninstaller's headless
+        // --cleanup-redirects run is exempt: it must do its cleanup and exit even if
+        // (or especially if) the app is still open, not raise the existing window.
+        return getCommandLineParameters().contains ("--cleanup-redirects");
+    }
+
+    void initialise (const juce::String& commandLine) override
+    {
+        // Headless mode used by the uninstaller: if a crashed run left an app's audio
+        // routed into the virtual cable (redirect.marker still present), restore that
+        // app's normal output before Plugin Play disappears for good — otherwise the
+        // app would be left silently playing into a cable with nothing to undo it.
+        // Normal launches do the same cleanup in AudioEngine::loadSession(); this path
+        // exists so uninstalling still heals the routing without opening any UI.
+        if (commandLine.contains ("--cleanup-redirects"))
+        {
+            const auto marker = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
+                                    .getChildFile ("PluginPlay")
+                                    .getChildFile ("redirect.marker");
+
+            if (marker.existsAsFile())
+            {
+                const auto exe = marker.loadFileAsString().trim();
+                marker.deleteFile();
+
+                if (exe.isNotEmpty() && ! play::AppRouting::clearAppOutputByName (exe))
+                    play::AppRouting::clearAllOverrides();
+            }
+
+            quit();
+            return;
+        }
+
         juce::PropertiesFile::Options options;
         options.applicationName = "PluginPlay";
         options.filenameSuffix = "settings";

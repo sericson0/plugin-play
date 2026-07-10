@@ -118,6 +118,16 @@ void SupportPanel::resized()
 
 void SupportPanel::launch()
 {
+    // Only one support dialog at a time: a second DONATE click (header button or
+    // the walkthrough's SUPPORT button) raises the existing window.
+    static juce::Component::SafePointer<juce::DialogWindow> openDialog;
+
+    if (openDialog != nullptr)
+    {
+        openDialog->toFront (true);
+        return;
+    }
+
     juce::DialogWindow::LaunchOptions options;
     options.content.setOwned (new SupportPanel());
     options.dialogTitle = "Support Plugin Play";
@@ -127,7 +137,10 @@ void SupportPanel::launch()
     options.resizable = false;
 
     if (auto* window = options.launchAsync())
+    {
+        openDialog = window;
         applyDarkTitleBar (*window);
+    }
 }
 
 } // namespace play

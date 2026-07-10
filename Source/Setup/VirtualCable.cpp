@@ -291,6 +291,17 @@ CableSetupComponent::~CableSetupComponent()
 //==============================================================================
 void CableSetupComponent::launch (juce::AudioDeviceManager& deviceManager)
 {
+    // Only one setup dialog at a time: a second click (from the header button or the
+    // "Set up cable" offer in an alert) raises the existing window instead of
+    // stacking a duplicate mid-install.
+    static juce::Component::SafePointer<juce::DialogWindow> openDialog;
+
+    if (openDialog != nullptr)
+    {
+        openDialog->toFront (true);
+        return;
+    }
+
     juce::DialogWindow::LaunchOptions options;
     options.content.setOwned (new CableSetupComponent (deviceManager));
     options.dialogTitle = "Virtual Cable Setup";
@@ -300,7 +311,10 @@ void CableSetupComponent::launch (juce::AudioDeviceManager& deviceManager)
     options.resizable = false;
 
     if (auto* window = options.launchAsync())
+    {
+        openDialog = window;
         applyDarkTitleBar (*window);
+    }
 }
 
 //==============================================================================

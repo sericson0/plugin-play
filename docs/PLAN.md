@@ -4,20 +4,25 @@ A free/donation Windows tool that lets DJs route their software's output through
 chain of VST3 plugins and out to any WASAPI or ASIO device.
 
 ```
-PRIMARY (driverless, validated 2026-07-05 — see experiments/process-loopback/):
+SHIPPED v1 (2026-07) — PRIMARY: per-app output redirect into the cable
 
-DJ software (Traktor / VirtualDJ / Mixxx / any, output = default device, SHARED mode)
-        │  captured by PID via process loopback (zero drivers, Win10 2004+)
-        │  dry signal killed by master-muting that endpoint (capture unaffected)
+User picks a running app in Plugin Play's INPUT dropdown
+        │  Plugin Play silently sets THAT app's output device → the virtual cable
+        │  (IAudioPolicyConfig per-app routing, the API behind Windows' "App volume
+        │   and device preferences"; restored on switch-away/quit/crash-recovery)
         ▼
-Plugin Play  —  VST3 chain: [Plugin 1] → [Plugin 2] → … (reorder, bypass, open GUIs)
-        │
+VB-CABLE (user-installed, guided)  →  Plugin Play reads "CABLE Output" as input
         ▼
-Different real device via WASAPI or ASIO (unaffected by Windows master mute)
+Plugin Play  —  VST3 chain: [Plugin 1] → [Plugin 2] → … (reorder, bypass, GUIs)
+        ▼
+Any output device via WASAPI or ASIO — can be the SAME speakers (no muting)
 
-FALLBACK (odd setups / app uses ASIO or exclusive WASAPI):
+SECONDARY: manual cable routing — the DJ app selects the cable as its output
+device itself; Plugin Play reads the cable. Same wiring, done by hand.
 
-DJ software → VB-CABLE (user-installed, guided) → Plugin Play input → out
+QUARANTINED (validated but shelved): driverless process-loopback capture + endpoint
+master-mute. Works, but forces output ≠ default device (the mute silences both).
+Kept compiled behind AudioEngine::enableLoopbackCapture = false.
 ```
 
 ## Decisions (2026-07-05)

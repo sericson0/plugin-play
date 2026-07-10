@@ -250,6 +250,16 @@ void WelcomePopup::resized()
 
 void WelcomePopup::show (juce::PropertiesFile& config)
 {
+    // Only one walkthrough at a time: a second GUIDE click raises the existing
+    // dialog instead of stacking a duplicate.
+    static juce::Component::SafePointer<juce::DialogWindow> openDialog;
+
+    if (openDialog != nullptr)
+    {
+        openDialog->toFront (true);
+        return;
+    }
+
     juce::DialogWindow::LaunchOptions options;
     options.content.setOwned (new WelcomePopup (config));
     options.dialogTitle = "Welcome to Plugin Play";
@@ -259,7 +269,10 @@ void WelcomePopup::show (juce::PropertiesFile& config)
     options.resizable = false;
 
     if (auto* window = options.launchAsync())
+    {
+        openDialog = window;
         applyDarkTitleBar (*window);
+    }
 }
 
 } // namespace play

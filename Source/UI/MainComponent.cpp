@@ -152,7 +152,9 @@ private:
         addHeading ("PLUGIN PLAY");
         addBody ("Plugin Play hosts VST3 effects between your DJ software and your "
                  "speakers, so you can add reverb, EQ, filters and more to the whole "
-                 "mix in real time.");
+                 "mix in real time.\n\nVersion "
+                 + juce::JUCEApplication::getInstance()->getApplicationVersion()
+                 + "  -  free and open source (GPLv3).");
 
         addHeading ("HOW IT WORKS");
         addBody ("Your DJ software's audio is routed into Plugin Play, passes through "

@@ -15,8 +15,11 @@ standalone app, with an optional in-flow VB-CABLE install.
 ```
 cmake -B build
 cmake --build build --config Release
-"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\PluginPlay.iss
+ISCC.exe installer\PluginPlay.iss
 ```
+
+`ISCC.exe` lives in `C:\Program Files (x86)\Inno Setup 6\` (all-users install) or
+`%LOCALAPPDATA%\Programs\Inno Setup 6\` (per-user install).
 
 The installer is written to `installer\Output\`.
 
@@ -37,6 +40,11 @@ ISCC.exe /DSourceDir="path\to\folder\with\Plugin Play.exe" installer\PluginPlay.
   and runs VB-Audio's elevated installer. A failed or declined download is
   non-fatal — the app can still install the cable later from its VIRTUAL CABLE
   button.
+- Drops a `.show-welcome` marker so the app shows its first-run walkthrough once
+  after every install/upgrade.
+- On **uninstall**, runs `Plugin Play.exe --cleanup-redirects` (headless) first:
+  if a crashed run left another app's audio routed into the virtual cable, its
+  normal output is restored before the exe is removed.
 
 ## Code signing
 
