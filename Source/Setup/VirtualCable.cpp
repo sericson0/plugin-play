@@ -426,10 +426,7 @@ void CableSetupComponent::refreshContent()
             "    DJ software  ->  cable  ->  Plugin Play (FX)  ->  your DAC\n"
             "\n"
             "Keep every stage at the same sample rate (usually 44.1 kHz) and leave "
-            "\"Audio Enhancements\" off on the cable to stay bit-transparent.\n"
-            "\n"
-            "Prefer no install? You can skip the cable entirely and just pick your DJ "
-            "app as the input source inside Plugin Play.",
+            "\"Audio Enhancements\" off on the cable to stay bit-transparent.\n",
             juce::dontSendNotification);
 
         installButton.setButtonText ("RE-INSTALL VB-CABLE");

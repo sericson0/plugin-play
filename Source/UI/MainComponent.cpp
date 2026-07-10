@@ -156,24 +156,23 @@ private:
 
     void populateOverview()
     {
-        addHeading ("PLUGIN PLAY");
-        addBody ("Plugin Play hosts VST3 effects between your DJ software and your "
-                 "speakers - reverb, EQ, filters and more on the whole mix, live. "
-                 "Your tracks on disk are never changed.\n"
-                 "Version " + juce::JUCEApplication::getInstance()->getApplicationVersion()
-                 + "  -  free and open source (GPLv3).");
+        addHeading ("PLUGIN PLAY - Version " + juce::JUCEApplication::getInstance()->getApplicationVersion());
+        addBody (
+            "Plugin Play is user-friendly host for VST3 effects."
+                 "Easily add EQ, dehissing, limiters, and more."
+                 "Can connect to any audio source or DJ software.");
 
         addHeading ("GETTING STARTED");
-        addBody ("1.  VIRTUAL CABLE - install the software 'wire' that carries your\n"
-                 "     music into Plugin Play. See the Virtual Cable tab.\n"
-                 "2.  INPUT & OUTPUT - pick an app (easiest) or a device as the\n"
-                 "     input, and your speakers as the output. See Audio Settings.\n"
-                 "3.  + Add Plugin - build your effect chain. See the Plugins tab.");
+        addBody ("1.  VIRTUAL CABLE - Plugin Play uses Virtual Cable to connect to your audio player. \n"
+                 "     See the Virtual Cable tab to install.\n"
+                 "2.  INPUT & OUTPUT - pick your audio player as the input, and your speakers as the output. See Audio Settings.\n"
+                 "You can also set CABLE Output as the output of your DJ software and the input to Plugin Play."
+                 "3. Add and rearrange plugin to build your effect chain. See the Plugins tab.");
 
         addHeading ("TIPS");
         addBody ("- Hover over any control for a tooltip that explains it.\n"
                  "- Save a chain you like as a preset from the PRESETS menu.\n"
-                 "- The LIMITER guards your speakers - leave it on.\n"
+                 "- Drag to rearrange plugins. Click hover+open to always see plugin gui.\n"
                  "- The GUIDE button above replays the welcome walkthrough.");
 
         addHeading ("CONTACT & SUPPORT");
@@ -185,9 +184,8 @@ private:
     void populateVirtualCable()
     {
         addHeading ("WHAT IT'S FOR");
-        addBody ("A virtual audio cable is a software 'wire' that carries sound "
-                 "between apps: your DJ software plays into the cable, and Plugin "
-                 "Play reads the cable as its input.");
+        addBody ("Virtual Cable is the software 'wire' that carries sound between apps:\n" 
+                 "your DJ software plays into the cable, and Plugin Play reads the cable as its input.");
 
         addHeading ("SETTING IT UP");
         addBody ("1.  Click VIRTUAL CABLE in the header - it checks for an installed cable.\n"
@@ -196,29 +194,25 @@ private:
                  "3.  After rebooting, open VIRTUAL CABLE again and Re-check.");
 
         addHeading ("ROUTING YOUR DJ SOFTWARE");
-        addBody ("Set your DJ software's master output to the cable (e.g. 'CABLE "
-                 "Input'). Then in Plugin Play, set INPUT to the matching 'CABLE "
-                 "Output' and OUTPUT to your speakers or interface.");
+        addBody ("You can route in two ways. First is to set your DJ software's master output to the cable (e.g. 'CABLE "
+                 "Input'). Then in Plugin Play, set INPUT to the matching 'CABLE Output' and OUTPUT to your speakers or interface.\n"
+                "second option is to directly select our audio player as the input in Plugin Play.");
 
-        addHeading ("NOTES");
-        addBody ("- Already have hardware loopback on your interface? Use it as\n"
-                 "   the INPUT and skip the install.\n"
-                 "- Don't set your DJ software's output volume too low, or the\n"
-                 "   captured signal will be quiet and noisy.");
+        addHeading ("NOTE");
+        addBody ("Don't set your DJ software's output volume too low, doing so can riase the noise floor.\n"
+            "Instead, change folume with your computer output volume or on your DAC or Mixer.");
     }
 
     void populateAudioSettings()
     {
         addHeading ("INPUT & OUTPUT");
-        addBody ("The device bar below the meters has INPUT and OUTPUT selectors. "
-                 "Set INPUT to your virtual cable (the sound coming from your DJ "
-                 "software) and OUTPUT to your speakers or audio interface.");
+        addBody ("The device bar below the meters has INPUT and OUTPUT selectors.\n"
+                 "Set OUTPUT to your speakers or audio interface. You can set INPUT to virtual cable and set this as output to your DJ software");
 
         addHeading ("SENDING AN APP THROUGH PLUGIN PLAY");
         addBody ("The INPUT dropdown also lists running apps. Pick one (e.g. Spotify) "
-                 "and Plugin Play routes it through the cable for you - nothing to "
-                 "change in Windows (needs a cable installed). The app's sound "
-                 "returns to normal when you switch away or quit.");
+                 "and Plugin Play routes it through the cable for you./n"
+                 "The app returns app output to normal when you switch away or quit.");
 
         addHeading ("ADVANCED CONTROLS");
         addBody ("Expand the panel for INPUT / OUTPUT PAIR (which channels of a "
