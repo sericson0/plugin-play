@@ -8,20 +8,22 @@ namespace play
 {
 
 //==============================================================================
-/** A process that currently has an audio session on the default render endpoint
-    — a candidate driverless capture source (the DJ app the user points us at). */
+/** A selectable audio source: an app with an audio session on the default render
+    endpoint, or an open app that could start playing (the DJ app the user points
+    us at). */
 struct AudioSource
 {
     juce::uint32 pid = 0;
     juce::String executable;   // e.g. "virtualdj.exe"
-    juce::String displayName;  // session display name; often empty
+    juce::String displayName;  // session name, or the window title for idle apps
     bool active = false;       // currently producing audio (vs. idle)
 };
 
-/** Enumerates selectable capture sources — the audio sessions on the default
-    render endpoint, system sounds skipped. Message-thread only (uses COM);
-    returns an empty list on non-Windows or if enumeration fails. This is the
-    same data source proven in experiments/process-loopback/list_sources.cpp. */
+/** Enumerates selectable sources: apps with an audio session on the default render
+    endpoint (system sounds skipped), plus open apps that have a window but no
+    session yet (e.g. a music app that hasn't pressed play) so idle apps are still
+    pickable. Message-thread only (uses COM); returns an empty list on non-Windows
+    or if enumeration fails. */
 std::vector<AudioSource> enumerateAudioSources();
 
 //==============================================================================

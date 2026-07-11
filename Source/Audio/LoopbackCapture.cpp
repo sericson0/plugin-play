@@ -10,12 +10,15 @@
 #include <audiopolicy.h>
 #include <endpointvolume.h>
 #include <psapi.h>
+#include <dwmapi.h>
 #include <wrl/client.h>
 #include <wrl/implements.h>
 
 // ActivateAudioInterfaceAsync lives in mmdevapi.lib; the rest of WASAPI/COM is
-// already linked by JUCE's audio_devices module.
+// already linked by JUCE's audio_devices module. DwmGetWindowAttribute (used to
+// skip cloaked ghost windows during the app scan) lives in dwmapi.lib.
 #pragma comment (lib, "mmdevapi.lib")
+#pragma comment (lib, "dwmapi.lib")
 
 namespace play
 {
@@ -48,6 +51,47 @@ static juce::String exeNameForPid (DWORD processId)
 
     CloseHandle (h);
     return name;
+}
+
+// Shell/system processes that own a visible window but aren't things a user would
+// ever route audio from — filtered out of the "open apps" pass below.
+static bool isSystemShellProcess (const juce::String& exe)
+{
+    static const char* const names[] = {
+        "explorer.exe", "applicationframehost.exe", "textinputhost.exe",
+        "searchhost.exe", "searchapp.exe", "startmenuexperiencehost.exe",
+        "shellexperiencehost.exe", "systemsettings.exe", "widgets.exe",
+        "widgetservice.exe", "lockapp.exe", "peopleexperiencehost.exe",
+        "narrator.exe"
+    };
+
+    for (auto* n : names)
+        if (exe.equalsIgnoreCase (n))
+            return true;
+
+    return false;
+}
+
+// True for a "real" app window — the kind that shows up in Alt-Tab. Filters out
+// tool windows, owned dialogs, cloaked UWP ghosts and untitled helper windows so
+// the open-apps scan lists actual programs, not their invisible plumbing.
+static bool isAppWindow (HWND hwnd)
+{
+    if (! IsWindowVisible (hwnd))
+        return false;
+
+    if (GetWindow (hwnd, GW_OWNER) != nullptr)   // owned = dialog/tool window
+        return false;
+
+    if ((GetWindowLongPtr (hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) != 0)
+        return false;
+
+    // A suspended/background UWP app can keep a non-visible "cloaked" window.
+    BOOL cloaked = FALSE;
+    if (SUCCEEDED (DwmGetWindowAttribute (hwnd, DWMWA_CLOAKED, &cloaked, sizeof cloaked)) && cloaked)
+        return false;
+
+    return GetWindowTextLengthW (hwnd) > 0;   // real apps have a title
 }
 
 std::vector<AudioSource> enumerateAudioSources()
@@ -125,6 +169,56 @@ std::vector<AudioSource> enumerateAudioSources()
             continue;
         }
 
+        sources.push_back (source);
+    }
+
+    // Also list apps that have an open window but no audio session yet — e.g. Spotify
+    // freshly launched, before you press play. Windows only creates a session once an
+    // app opens an audio stream, so a session-only list hides idle music apps. The
+    // per-app redirect is keyed on app identity, so these can be picked now and will
+    // feed the cable the moment they start playing.
+    struct WindowApp { DWORD pid; juce::String title; };
+    std::vector<WindowApp> windowApps;
+
+    EnumWindows ([] (HWND hwnd, LPARAM lp) -> BOOL
+    {
+        auto& list = *reinterpret_cast<std::vector<WindowApp>*> (lp);
+
+        if (! isAppWindow (hwnd))
+            return TRUE;
+
+        DWORD wpid = 0;
+        GetWindowThreadProcessId (hwnd, &wpid);
+        if (wpid == 0 || wpid == GetCurrentProcessId())
+            return TRUE;
+
+        // One entry per process (an app can own several top-level windows).
+        if (std::any_of (list.begin(), list.end(),
+                         [wpid] (const WindowApp& w) { return w.pid == wpid; }))
+            return TRUE;
+
+        wchar_t title[256] = {};
+        GetWindowTextW (hwnd, title, 256);
+        list.push_back ({ wpid, juce::String (title) });
+        return TRUE;
+    }, reinterpret_cast<LPARAM> (&windowApps));
+
+    for (const auto& w : windowApps)
+    {
+        // Skip apps already listed from an audio session (they're the same process).
+        if (std::any_of (sources.begin(), sources.end(),
+                         [&] (const AudioSource& s) { return s.pid == (juce::uint32) w.pid; }))
+            continue;
+
+        const auto exe = exeNameForPid (w.pid);
+        if (exe.isEmpty() || isSystemShellProcess (exe))
+            continue;
+
+        AudioSource source;
+        source.pid         = (juce::uint32) w.pid;
+        source.executable  = exe;
+        source.displayName = w.title;
+        source.active      = false;   // no audio session, so not currently playing
         sources.push_back (source);
     }
 
