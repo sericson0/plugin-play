@@ -55,6 +55,7 @@ target_sources(PluginPlay
         Source/Audio/LoopbackCapture.cpp
         Source/Audio/WasapiEndpoints.cpp
         Source/Plugins/PluginScanner.cpp
+        Source/Setup/UpdateCheck.cpp
         Source/Setup/VirtualCable.cpp
         Source/UI/MainComponent.cpp
         Source/UI/ChainView.cpp

@@ -30,14 +30,17 @@ namespace VirtualCable
             || n.contains ("vac ");
     }
 
-    juce::String findInstalled (juce::AudioDeviceManager& deviceManager)
+    juce::String findInstalled (juce::AudioDeviceManager& deviceManager, bool rescan)
     {
+        // getAvailableDeviceTypes() runs the one-time startup scan if it hasn't
+        // happened yet, so the fast path never reads an unscanned list.
         for (auto* type : deviceManager.getAvailableDeviceTypes())
         {
             if (type == nullptr)
                 continue;
 
-            type->scanForDevices();
+            if (rescan)
+                type->scanForDevices();
 
             for (bool wantInputs : { true, false })
                 for (const auto& name : type->getDeviceNames (wantInputs))
@@ -276,7 +279,7 @@ CableSetupComponent::CableSetupComponent (juce::AudioDeviceManager& dm)
     }
     donateLink.setColour (juce::HyperlinkButton::textColourId, textNormal);
 
-    detectedCable = VirtualCable::findInstalled (deviceManager);
+    detectedCable = VirtualCable::findInstalled (deviceManager, false);
     refreshContent();
 
     setSize (520, 470);
@@ -394,7 +397,9 @@ void CableSetupComponent::confirmAndReboot()
 //==============================================================================
 void CableSetupComponent::recheck()
 {
-    detectedCable = VirtualCable::findInstalled (deviceManager);
+    // The user is explicitly asking "is it there NOW?" (usually right after an
+    // install), so force a fresh driver scan rather than trusting the lists.
+    detectedCable = VirtualCable::findInstalled (deviceManager, true);
     refreshContent();
 }
 
@@ -437,9 +442,9 @@ void CableSetupComponent::refreshContent()
         statusLabel.setText ("No virtual cable found", juce::dontSendNotification);
 
         body.setText (
-            "This step is OPTIONAL. It lets Plugin Play appear as an output device "
-            "inside your DJ software. (You can also just pick your DJ app directly as "
-            "the input source in Plugin Play, with nothing to install.)\n"
+            "Plugin Play needs a virtual cable to receive sound from your other apps - "
+            "both the app picker in the INPUT dropdown and manual device routing run "
+            "through it.\n"
             "\n"
             "To install the recommended free cable, VB-CABLE:\n"
             "\n"

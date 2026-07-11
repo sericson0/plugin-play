@@ -58,7 +58,7 @@ See [docs/PLAN.md](docs/PLAN.md) for architecture notes and the roadmap.
 ## Support
 
 Questions, bugs, ideas: **TangoToolkit@gmail.com**. If Plugin Play helps your sets,
-the DONATE button in the app takes tips (card / Apple Pay, Venmo, Zelle).
+the SUPPORT button in the app takes tips (card / Apple Pay, Venmo, Zelle).
 
 ## License
 

@@ -118,7 +118,7 @@ void SupportPanel::resized()
 
 void SupportPanel::launch()
 {
-    // Only one support dialog at a time: a second DONATE click (header button or
+    // Only one support dialog at a time: a second SUPPORT click (header button or
     // the walkthrough's SUPPORT button) raises the existing window.
     static juce::Component::SafePointer<juce::DialogWindow> openDialog;
 

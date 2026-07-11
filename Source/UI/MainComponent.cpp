@@ -3,6 +3,7 @@
 #include "WelcomePopup.h"
 #include "SupportPanel.h"
 #include "../Audio/WasapiEndpoints.h"
+#include "../Setup/UpdateCheck.h"
 #include "BinaryData.h"
 
 namespace play
@@ -19,8 +20,8 @@ namespace
 class HelpContent : public juce::Component
 {
 public:
-    explicit HelpContent (juce::PropertiesFile& uiPrefsToUse)
-        : uiPrefs (uiPrefsToUse)
+    HelpContent (juce::PropertiesFile& uiPrefsToUse, juce::AudioDeviceManager& dm)
+        : uiPrefs (uiPrefsToUse), deviceManager (dm)
     {
         logo = juce::ImageCache::getFromMemory (BinaryData::full_logo_png,
                                                 BinaryData::full_logo_pngSize);
@@ -52,8 +53,15 @@ public:
 
         guideButton.setColour (juce::TextButton::textColourOffId, accentBright);
         guideButton.setTooltip ("Replay the step-by-step welcome walkthrough");
-        guideButton.onClick = [this] { WelcomePopup::show (uiPrefs); };
+        guideButton.onClick = [this] { WelcomePopup::show (uiPrefs, deviceManager); };
         addAndMakeVisible (guideButton);
+
+        // The cable setup lives here once the header button has given way to
+        // CHECK UPDATES (i.e. once a cable is installed).
+        cableSetupButton.setColour (juce::TextButton::textColourOffId, accentBright);
+        cableSetupButton.setTooltip ("Check for - or install - the virtual audio cable");
+        cableSetupButton.onClick = [this] { CableSetupComponent::launch (deviceManager); };
+        addAndMakeVisible (cableSetupButton);
 
         doc.setMultiLine (true);
         doc.setReadOnly (true);
@@ -106,6 +114,7 @@ public:
         area.removeFromTop (bannerHeight);
 
         auto tabRow = area.removeFromTop (tabRowHeight).reduced (2, 4);
+        cableSetupButton.setBounds (tabRow.removeFromRight (112).reduced (2, 0));
         guideButton.setBounds (tabRow.removeFromRight (78).reduced (2, 0));
         const int tabW = tabRow.getWidth() / numTabs;
         for (int i = 0; i < numTabs; ++i)
@@ -158,61 +167,66 @@ private:
     {
         addHeading ("PLUGIN PLAY - Version " + juce::JUCEApplication::getInstance()->getApplicationVersion());
         addBody (
-            "Plugin Play is user-friendly host for VST3 effects."
-                 "Easily add EQ, dehissing, limiters, and more."
-                 "Can connect to any audio source or DJ software.");
+            "Plugin Play is a user-friendly host for VST3 effects. "
+                 "Easily add EQ, dehissing, limiters and more. "
+                 "It can connect to any audio source or DJ software.");
 
         addHeading ("GETTING STARTED");
-        addBody ("1.  VIRTUAL CABLE - Plugin Play uses Virtual Cable to connect to your audio player. \n"
-                 "     See the Virtual Cable tab to install.\n"
-                 "2.  INPUT & OUTPUT - pick your audio player as the input, and your speakers as the output. See Audio Settings.\n"
-                 "You can also set CABLE Output as the output of your DJ software and the input to Plugin Play."
-                 "3. Add and rearrange plugin to build your effect chain. See the Plugins tab.");
+        addBody ("1.  VIRTUAL CABLE - Plugin Play uses a virtual cable to connect to\n"
+                 "     your audio player. See the Virtual Cable tab to install.\n"
+                 "2.  INPUT & OUTPUT - pick your audio player as the input, and your\n"
+                 "     speakers as the output. See Audio Settings. You can also set\n"
+                 "     CABLE Output as your DJ software's output and Plugin Play's input.\n"
+                 "3.  Add and rearrange plugins to build your effect chain. See the\n"
+                 "     Plugins tab.");
 
         addHeading ("TIPS");
         addBody ("- Hover over any control for a tooltip that explains it.\n"
                  "- Save a chain you like as a preset from the PRESETS menu.\n"
-                 "- Drag to rearrange plugins. Click hover+open to always see plugin gui.\n"
+                 "- Drag cards by their grip dots to rearrange plugins.\n"
+                 "- Use a card's FLOAT button to keep its plugin window on top.\n"
                  "- The GUIDE button above replays the welcome walkthrough.");
 
         addHeading ("CONTACT & SUPPORT");
         addBody ("Questions, suggestions or bugs: TangoToolkit@gmail.com. Plugin Play "
                  "is free and open source - if it helps your sets, consider a tip via "
-                 "DONATE in the header (Card / Apple Pay, Venmo or Zelle).");
+                 "SUPPORT in the header (Card / Apple Pay, Venmo or Zelle).");
     }
 
     void populateVirtualCable()
     {
         addHeading ("WHAT IT'S FOR");
-        addBody ("Virtual Cable is the software 'wire' that carries sound between apps:\n" 
+        addBody ("A virtual cable is a software 'wire' that carries sound between apps:\n"
                  "your DJ software plays into the cable, and Plugin Play reads the cable as its input.");
 
         addHeading ("SETTING IT UP");
-        addBody ("1.  Click VIRTUAL CABLE in the header - it checks for an installed cable.\n"
+        addBody ("1.  Click VIRTUAL CABLE (in the header until a cable is installed,\n"
+                 "     and always at the top of this window) - it checks for a cable.\n"
                  "2.  If none is found, it walks you through installing VB-CABLE\n"
                  "     (a free download): run the installer as admin, then reboot.\n"
                  "3.  After rebooting, open VIRTUAL CABLE again and Re-check.");
 
         addHeading ("ROUTING YOUR DJ SOFTWARE");
-        addBody ("You can route in two ways. First is to set your DJ software's master output to the cable (e.g. 'CABLE "
+        addBody ("You can route in two ways. First, set your DJ software's master output to the cable (e.g. 'CABLE "
                  "Input'). Then in Plugin Play, set INPUT to the matching 'CABLE Output' and OUTPUT to your speakers or interface.\n"
-                "second option is to directly select our audio player as the input in Plugin Play.");
+                 "Second, you can select your audio player directly as the input in Plugin Play.");
 
         addHeading ("NOTE");
-        addBody ("Don't set your DJ software's output volume too low, doing so can riase the noise floor.\n"
-            "Instead, change folume with your computer output volume or on your DAC or Mixer.");
+        addBody ("Don't set your DJ software's output volume too low - doing so can raise the noise floor.\n"
+                 "Instead, adjust the volume with your computer's output volume, DAC or mixer.");
     }
 
     void populateAudioSettings()
     {
         addHeading ("INPUT & OUTPUT");
         addBody ("The device bar below the meters has INPUT and OUTPUT selectors.\n"
-                 "Set OUTPUT to your speakers or audio interface. You can set INPUT to virtual cable and set this as output to your DJ software");
+                 "Set OUTPUT to your speakers or audio interface. Set INPUT to the "
+                 "virtual cable, and set that cable as the output in your DJ software.");
 
         addHeading ("SENDING AN APP THROUGH PLUGIN PLAY");
         addBody ("The INPUT dropdown also lists running apps. Pick one (e.g. Spotify) "
-                 "and Plugin Play routes it through the cable for you./n"
-                 "The app returns app output to normal when you switch away or quit.");
+                 "and Plugin Play routes it through the cable for you.\n"
+                 "It returns the app's output to normal when you switch away or quit.");
 
         addHeading ("ADVANCED CONTROLS");
         addBody ("Expand the panel for INPUT / OUTPUT PAIR (which channels of a "
@@ -289,9 +303,11 @@ private:
     static constexpr int tabRowHeight = 34;
 
     juce::PropertiesFile& uiPrefs;
+    juce::AudioDeviceManager& deviceManager;
     juce::Image logo;
     juce::TextButton tabButtons[numTabs];
     juce::TextButton guideButton { "GUIDE" };
+    juce::TextButton cableSetupButton { "VIRTUAL CABLE" };
     juce::TextEditor doc;
     int selectedTab = 0;
 };
@@ -370,9 +386,10 @@ void LevelMeter::paint (juce::Graphics& g)
         return juce::jlimit (0.0f, 1.0f, juce::jmap (dB, -60.0f, 0.0f, 0.0f, 1.0f));
     };
 
-    // Zone boundaries as bar proportions: green up to -12 dB, amber to -3 dB, red above.
-    const float amberStart = proportionFor (juce::Decibels::decibelsToGain (-12.0f));
-    const float redStart   = proportionFor (juce::Decibels::decibelsToGain (-3.0f));
+    // Zone boundaries as bar proportions: green up to -18 dB, amber to -6 dB, red
+    // above — weighted so the hot amber/red zones take a bigger share of the bar.
+    const float amberStart = proportionFor (juce::Decibels::decibelsToGain (-18.0f));
+    const float redStart   = proportionFor (juce::Decibels::decibelsToGain (-6.0f));
 
     auto barArea = area.reduced (0, 4);
     const int barHeight = (barArea.getHeight() - 3) / 2;
@@ -386,7 +403,7 @@ void LevelMeter::paint (juce::Graphics& g)
         g.setColour (sliderTrack);
         g.fillRoundedRectangle (barF, 2.0f);
 
-        // Faint gain-staging ticks at the -12 and -3 dB zone edges.
+        // Faint gain-staging ticks at the -18 and -6 dB zone edges.
         g.setColour (gridLine.brighter (0.4f));
         for (float tick : { amberStart, redStart })
         {
@@ -430,15 +447,59 @@ void LevelMeter::paint (juce::Graphics& g)
 }
 
 //==============================================================================
+void RefreshButton::paintButton (juce::Graphics& g, bool isHighlighted, bool isDown)
+{
+    auto bounds = getLocalBounds().toFloat().reduced (0.5f);
+
+    g.setColour (isDown ? sliderTrack : isHighlighted ? buttonBgHover : buttonBg);
+    g.fillRoundedRectangle (bounds, 4.0f);
+
+    // Two opposed arcs with arrowheads — the usual circular "rescan" glyph, drawn
+    // by hand so it doesn't depend on the font shipping a refresh character.
+    const auto centre = bounds.getCentre();
+    const float radius = juce::jmin (bounds.getWidth(), bounds.getHeight()) * 0.27f;
+
+    g.setColour (isHighlighted || isDown ? textBright : textNormal);
+
+    for (float offset : { 0.0f, juce::MathConstants<float>::pi })
+    {
+        // Angles are radians clockwise from 12 o'clock (JUCE's arc convention);
+        // the point at angle t is centre + radius * (sin t, -cos t).
+        const float start = offset + 0.35f;
+        const float end   = offset + juce::MathConstants<float>::pi - 0.55f;
+
+        juce::Path arc;
+        arc.addCentredArc (centre.x, centre.y, radius, radius, 0.0f, start, end, true);
+        g.strokePath (arc, juce::PathStrokeType (1.8f, juce::PathStrokeType::curved,
+                                                 juce::PathStrokeType::rounded));
+
+        // Arrowhead at the arc's end, pointing along the direction of travel.
+        const juce::Point<float> tip (centre.x + radius * std::sin (end),
+                                      centre.y - radius * std::cos (end));
+        const juce::Point<float> tangent (std::cos (end), std::sin (end));
+        const juce::Point<float> normal (-tangent.y, tangent.x);
+
+        const float length = radius * 0.8f, width = radius * 0.55f;
+
+        juce::Path head;
+        head.addTriangle (tip + tangent * length,
+                          tip - tangent * (length * 0.2f) + normal * width,
+                          tip - tangent * (length * 0.2f) - normal * width);
+        g.fillPath (head);
+    }
+}
+
+//==============================================================================
 MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerToUse)
     : engine (engineToUse), scanner (scannerToUse)
 {
     scanButton.onClick      = [this] { showScanMenu(); };
     cableButton.onClick     = [this] { CableSetupComponent::launch (engine.deviceManager); };
-    donateButton.onClick    = [this] { SupportPanel::launch(); };
+    updateButton.onClick    = [this] { checkForUpdates(); };
+    supportButton.onClick   = [this] { SupportPanel::launch(); };
     helpButton.onClick      = [this] { showHelp(); };
     presetsButton.onClick   = [this] { showPresetsMenu(); };
-    donateButton.setColour (juce::TextButton::textColourOffId, accentBright);
+    supportButton.setColour (juce::TextButton::textColourOffId, accentBright);
     killButton.onClick      = [this] { engine.setMasterBypass (! engine.isMasterBypassed()); };
     killButton.setColour (juce::TextButton::textColourOffId, accentBright);
     killButton.setColour (juce::TextButton::buttonOnColourId, metricBad.darker (0.5f));
@@ -456,7 +517,8 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
 
     scanButton    .setTooltip ("Scan for installed VST3 plugins, or manage extra scan folders");
     cableButton   .setTooltip ("Set up the virtual audio cable that captures your DJ software");
-    donateButton  .setTooltip ("Support Plugin Play - Card / Apple Pay, Venmo or Zelle");
+    updateButton  .setTooltip ("Check GitHub for a newer version of Plugin Play");
+    supportButton .setTooltip ("Support Plugin Play - Card / Apple Pay, Venmo or Zelle");
     helpButton    .setTooltip ("Open the Plugin Play help & documentation (and the GUIDE walkthrough)");
     presetsButton .setTooltip ("Save the current chain, or load a saved one");
     killButton    .setTooltip ("Master bypass - turn every effect on or off at once");
@@ -465,7 +527,9 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
 
     addAndMakeVisible (scanButton);
     addAndMakeVisible (cableButton);
-    addAndMakeVisible (donateButton);
+    addChildComponent (updateButton);   // shares the cable button's slot; visibility
+                                        // is decided by updateHeaderButtons()
+    addAndMakeVisible (supportButton);
     addAndMakeVisible (helpButton);
     addAndMakeVisible (presetsButton);
     addAndMakeVisible (killButton);
@@ -498,9 +562,15 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
     }
 
     inputSelector .setTextWhenNoChoicesAvailable ("No inputs");
+    inputSelector .setTextWhenNothingSelected ("None - choose a source");
     outputSelector.setTextWhenNoChoicesAvailable ("No outputs");
     inputSelector .onChange = [this] { if (! updatingSelectors) applyInputSelection(); };
     outputSelector.onChange = [this] { if (! updatingSelectors) applyDeviceSelection(); };
+
+    rescanButton.setTooltip ("Re-scan the input and output lists - picks up devices "
+                             "and apps opened after Plugin Play started");
+    rescanButton.onClick = [this] { rescanDevices(); };
+    addAndMakeVisible (rescanButton);
 
     inputChannelSelector .setTextWhenNoChoicesAvailable ("-");
     outputChannelSelector.setTextWhenNoChoicesAvailable ("-");
@@ -632,13 +702,12 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
     cpuLabel.setTooltip ("Audio processing load - amber over 60%, red over 85%");
     addAndMakeVisible (cpuLabel);
 
-    // Redirect banner: hidden until an app is being routed through Plugin Play. Added
-    // (not made visible) so updateRedirectBanner() controls visibility + layout.
-    redirectBanner.setJustificationType (juce::Justification::centred);
-    redirectBanner.setFont (juce::Font (juce::FontOptions (13.0f, juce::Font::bold)));
-    redirectBanner.setTooltip ("Plugin Play is routing this app's audio through the effect chain. "
-                               "Choose a different input to stop.");
-    addChildComponent (redirectBanner);
+    // Header source readout: empty until an app is being sent through Plugin Play.
+    sourceIndicator.setJustificationType (juce::Justification::centredRight);
+    sourceIndicator.setFont (juce::Font (juce::FontOptions (13.0f, juce::Font::bold)));
+    sourceIndicator.setTooltip ("Plugin Play is routing this app's audio through the effect chain. "
+                                "Choose a different input to stop.");
+    addAndMakeVisible (sourceIndicator);
 
     engine.addChangeListener (this);
     scanner.addChangeListener (this);
@@ -664,7 +733,7 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
     // window appears immediately) and the device list is still unscanned. The engine's
     // change broadcast right after loadSession() populates every selector.
     updateStatusText();
-    updateRedirectBanner();
+    updateSourceIndicator();
 
     // Show the first-run walkthrough once the window is up (deferred so it centres
     // over a fully-constructed main window).
@@ -760,13 +829,21 @@ void MainComponent::resized()
     auto header = area.removeFromTop (56).reduced (12, 13);
     helpButton.setBounds (header.removeFromRight (58));
     header.removeFromRight (8);
-    cableButton.setBounds (header.removeFromRight (118));
-    header.removeFromRight (8);
-    donateButton.setBounds (header.removeFromRight (78));
 
-    // Redirect banner strip (only takes space while shown), between header + meters.
-    if (bannerShown)
-        redirectBanner.setBounds (area.removeFromTop (28));
+    // VIRTUAL CABLE and CHECK UPDATES share one slot; updateHeaderButtons() decides
+    // which is visible (setup until a cable is installed, updates afterwards).
+    const auto cableSlot = header.removeFromRight (118);
+    cableButton .setBounds (cableSlot);
+    updateButton.setBounds (cableSlot);
+
+    header.removeFromRight (8);
+    supportButton.setBounds (header.removeFromRight (78));
+
+    // The rest of the header (right of the wordmark) is the source readout naming
+    // the app currently sent through Plugin Play.
+    header.removeFromRight (8);
+    header.removeFromLeft (210);   // keep clear of the painted logo + wordmark
+    sourceIndicator.setBounds (header);
 
     // Meter row: IN meter | FX kill switch | OUT meter | LIMITER.
     auto meterRow = area.removeFromTop (40).reduced (16, 6);
@@ -790,9 +867,15 @@ void MainComponent::resized()
     audioToggleButton.setBounds (bar.removeFromBottom (24).withSizeKeepingCentre (170, 24));
     bar.removeFromBottom (10);   // gap between the content and the toggle
 
-    // Input | output device columns.
+    // Input | output device columns, with the rescan button at the row's right end
+    // (re-checks both lists so late-started apps / hot-plugged devices show up).
     auto labelRow = bar.removeFromTop (14);
     auto comboRow = bar.removeFromTop (26);
+
+    rescanButton.setBounds (comboRow.removeFromRight (26));
+    comboRow.removeFromRight (6);
+    labelRow.removeFromRight (32);
+
     const int barHalf = labelRow.getWidth() / 2;
 
     inputLabel .setBounds (labelRow.removeFromLeft (barHalf).withTrimmedRight (8));
@@ -886,7 +969,8 @@ void MainComponent::changeListenerCallback (juce::ChangeBroadcaster* source)
     updateKillButton();
     updateLimiterButton();
     updateStatusText();
-    updateRedirectBanner();
+    updateSourceIndicator();
+    updateHeaderButtons();
 }
 
 void MainComponent::timerCallback()
@@ -896,11 +980,11 @@ void MainComponent::timerCallback()
     inputMeter.pushLevels (inL, inR);
     outputMeter.pushLevels (engine.readOutputPeak (0), engine.readOutputPeak (1));
 
-    // Count down a transient "<app> closed" notice; refresh the banner when it expires.
+    // Count down a transient "<app> closed" notice; refresh the readout when it expires.
     if (redirectNoticeTicks > 0 && --redirectNoticeTicks == 0)
     {
         redirectNotice.clear();
-        updateRedirectBanner();
+        updateSourceIndicator();
     }
 
     if (++timerTicks % 30 == 0)
@@ -1018,7 +1102,7 @@ void MainComponent::showHelp()
         return;
     }
 
-    auto content = std::make_unique<HelpContent> (*uiPrefs);
+    auto content = std::make_unique<HelpContent> (*uiPrefs, engine.deviceManager);
 
     juce::DialogWindow::LaunchOptions options;
     options.content.setOwned (content.release());
@@ -1048,7 +1132,7 @@ void MainComponent::maybeShowFirstRunGuide()
     // guide is dismissed (permanent suppression is the "Don't show again" toggle).
     WelcomePopup::markerFile().deleteFile();
 
-    WelcomePopup::show (*uiPrefs);
+    WelcomePopup::show (*uiPrefs, engine.deviceManager);
 }
 
 //==============================================================================
@@ -1765,7 +1849,9 @@ void MainComponent::updateStatusText()
 
         // CPU load in its own label so it can be tinted before dropouts become audible.
         const auto cpu = engine.deviceManager.getCpuUsage() * 100.0;
-        cpuText = "CPU " + juce::String (cpu, 0) + "%";
+        // roundToInt, not String (cpu, 0): JUCE treats 0 decimal places as "use
+        // full precision", which printed strings like "CPU 2.24424%".
+        cpuText = "CPU " + juce::String (juce::roundToInt (cpu)) + "%";
         cpuLabel.setColour (juce::Label::textColourId,
                             cpu > 85.0 ? metricBad : (cpu > 60.0 ? metricWarn : gridText));
     }
@@ -1778,38 +1864,110 @@ void MainComponent::updateStatusText()
     cpuLabel.setText (cpuText, juce::dontSendNotification);
 }
 
-void MainComponent::updateRedirectBanner()
+void MainComponent::updateSourceIndicator()
 {
     juce::String text;
-    juce::Colour bg;
-    bool show = false;
+    juce::Colour colour = accentBright;
 
     if (redirectNotice.isNotEmpty())
     {
         // Transient notice (e.g. the routed app just closed).
-        text = redirectNotice;
-        bg   = metricWarn;
-        show = true;
+        text   = redirectNotice;
+        colour = metricWarn;
     }
     else if (engine.isRedirectingApp())
     {
-        // Persistent "we're routing this app" indicator. \xe2\x96\xb6 = ▶, \xc2\xb7 = ·
-        text << "\xe2\x96\xb6  Sending " << engine.redirectedAppName()
-             << " through Plugin Play   \xc2\xb7   pick another input to stop";
-        bg   = accent;
-        show = true;
+        // Persistent "we're routing this app" readout: just the program name,
+        // without its .exe suffix. \xe2\x96\xb6 = ▶
+        auto app = engine.redirectedAppName();
+        if (app.endsWithIgnoreCase (".exe"))
+            app = app.dropLastCharacters (4);
+
+        text << "\xe2\x96\xb6  " << app;
     }
 
-    redirectBanner.setText (text, juce::dontSendNotification);
-    redirectBanner.setColour (juce::Label::backgroundColourId, bg);
-    redirectBanner.setColour (juce::Label::textColourId, background);   // dark text on the bright strip
+    sourceIndicator.setText (text, juce::dontSendNotification);
+    sourceIndicator.setColour (juce::Label::textColourId, colour);
+}
 
-    if (show != bannerShown)
-    {
-        bannerShown = show;
-        redirectBanner.setVisible (show);
-        resized();   // reclaim / reserve the band
-    }
+void MainComponent::updateHeaderButtons()
+{
+    // Once a cable is installed the VIRTUAL CABLE setup button has done its job, so
+    // its header slot becomes CHECK UPDATES (cable setup stays reachable from HELP
+    // and the walkthrough). If the cable is ever uninstalled, the setup button comes
+    // back. The no-rescan lookup just reads the already-enumerated device lists.
+    cableInstalled = VirtualCable::findInstalled (engine.deviceManager, false).isNotEmpty();
+
+    cableButton .setVisible (! cableInstalled);
+    updateButton.setVisible (cableInstalled);
+}
+
+void MainComponent::rescanDevices()
+{
+    // Force a fresh driver scan so devices and apps that appeared after startup
+    // (DJ software launched later, a cable just installed) become selectable.
+    juce::MouseCursor::showWaitCursor();
+
+    for (auto* type : engine.deviceManager.getAvailableDeviceTypes())
+        if (type != nullptr)
+            type->scanForDevices();
+
+    juce::MouseCursor::hideWaitCursor();
+
+    buildDeviceSelectors();     // re-lists devices AND running apps
+    updateHeaderButtons();      // a cable may have (dis)appeared
+}
+
+void MainComponent::checkForUpdates()
+{
+    if (checkingForUpdates)
+        return;
+
+    checkingForUpdates = true;
+    updateButton.setEnabled (false);
+    updateButton.setButtonText ("CHECKING...");
+
+    const auto current = juce::JUCEApplication::getInstance()->getApplicationVersion();
+
+    UpdateCheck::checkAsync (current,
+        [safe = juce::Component::SafePointer<MainComponent> (this), current] (const UpdateCheck::Result& result)
+        {
+            if (safe == nullptr)
+                return;
+
+            safe->checkingForUpdates = false;
+            safe->updateButton.setEnabled (true);
+            safe->updateButton.setButtonText ("CHECK UPDATES");
+
+            if (! result.ok)
+            {
+                juce::AlertWindow::showMessageBoxAsync (
+                    juce::MessageBoxIconType::WarningIcon, "Update check failed",
+                    "Couldn't reach GitHub to check for updates. Check your internet "
+                    "connection and try again.");
+                return;
+            }
+
+            if (! result.updateAvailable)
+            {
+                juce::AlertWindow::showMessageBoxAsync (
+                    juce::MessageBoxIconType::InfoIcon, "Up to date",
+                    "You're on the latest version (" + current + ").");
+                return;
+            }
+
+            const auto url = result.downloadUrl;
+            juce::AlertWindow::showOkCancelBox (
+                juce::MessageBoxIconType::QuestionIcon, "Update available",
+                "Version " + result.latestVersion + " is available (you have "
+                    + current + ").\n\nDownload the new installer?",
+                "Download", "Later", nullptr,
+                juce::ModalCallbackFunction::create ([url] (int r)
+                {
+                    if (r == 1)
+                        juce::URL (url).launchInDefaultBrowser();
+                }));
+        });
 }
 
 void MainComponent::checkRedirectedAppAlive()
@@ -1823,9 +1981,9 @@ void MainComponent::checkRedirectedAppAlive()
     engine.clearRedirectedApp();
     buildDeviceSelectors();
 
-    redirectNotice     = app + " closed \xe2\x80\x94 stopped routing it. Pick an input to continue.";
+    redirectNotice      = app + " closed \xe2\x80\x94 routing stopped";
     redirectNoticeTicks = 30 * 6;   // ~6 seconds at 30 Hz
-    updateRedirectBanner();
+    updateSourceIndicator();
 }
 
 } // namespace play

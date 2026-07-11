@@ -1,5 +1,6 @@
 #include "WelcomePopup.h"
 #include "SupportPanel.h"
+#include "../Setup/VirtualCable.h"
 #include "../Theme.h"
 
 namespace play
@@ -14,8 +15,8 @@ namespace
     constexpr int bulletGutter = 22;
 }
 
-WelcomePopup::WelcomePopup (juce::PropertiesFile& config)
-    : config_ (config)
+WelcomePopup::WelcomePopup (juce::PropertiesFile& config, juce::AudioDeviceManager& deviceManager)
+    : config_ (config), deviceManager_ (deviceManager)
 {
     setSize (popupWidth, popupHeight);
 
@@ -35,15 +36,19 @@ WelcomePopup::WelcomePopup (juce::PropertiesFile& config)
     nextButton_.onClick    = [this] { if (currentStep_ < totalSteps - 1) goToStep (currentStep_ + 1); };
     doneButton_.onClick    = [this] { finishAndClose(); };
     supportButton_.onClick = [] { SupportPanel::launch(); };
+    cableButton_.onClick   = [this] { CableSetupComponent::launch (deviceManager_); };
 
     doneButton_.setColour   (juce::TextButton::textColourOffId, accentBright);
     supportButton_.setColour (juce::TextButton::textColourOffId, accentBright);
     supportButton_.setTooltip ("Support Plugin Play — Card / Apple Pay, Venmo or Zelle");
+    cableButton_.setColour (juce::TextButton::textColourOffId, accentBright);
+    cableButton_.setTooltip ("Guided VB-CABLE install — one download, approve the prompts, reboot");
 
     addAndMakeVisible (backButton_);
     addAndMakeVisible (nextButton_);
     addAndMakeVisible (doneButton_);
     addAndMakeVisible (supportButton_);
+    addChildComponent (cableButton_);   // shown only on the cable step when none is installed
 
     dontShowAgainToggle_.setToggleState (true, juce::dontSendNotification);
     dontShowAgainToggle_.setColour (juce::ToggleButton::textColourId, textNormal);
@@ -89,12 +94,10 @@ void WelcomePopup::loadStepContent()
         steps_.add (s);
     }
     {
+        // Body lines are filled in by refreshCableStep() when the step is shown,
+        // after scanning the audio devices for an installed cable.
         StepContent s;
         s.title = "Set up a virtual cable";
-        s.lines.add ({ "A virtual cable is a software wire that carries sound" });
-        s.lines.add ({ "between apps - it's how your music reaches Plugin Play.", false, true });
-        s.lines.add ({ "Click VIRTUAL CABLE in the header for a guided install." });
-        s.lines.add ({ "One quick download and a reboot - that's it." });
         steps_.add (s);
     }
     {
@@ -138,9 +141,38 @@ void WelcomePopup::loadStepContent()
     }
 }
 
+void WelcomePopup::refreshCableStep()
+{
+    detectedCable_ = VirtualCable::findInstalled (deviceManager_, false);
+
+    auto& lines = steps_.getReference (cableStepIndex).lines;
+    lines.clearQuick();
+
+    lines.add ({ "A virtual cable is a software wire that carries sound" });
+    lines.add ({ "between apps - it's how your music reaches Plugin Play.", false, true });
+
+    if (detectedCable_.isNotEmpty())
+    {
+        lines.add ({ juce::String (juce::CharPointer_UTF8 ("\xe2\x9c\x93 Installed:  ")) + detectedCable_,
+                     false, false, true });
+        lines.add ({ "You're all set - nothing to install here." });
+    }
+    else
+    {
+        lines.add ({ "No virtual cable was found - Plugin Play needs one to work.", true });
+        lines.add ({ "Click INSTALL CABLE below for a guided install -" });
+        lines.add ({ "one quick download and a reboot, that's it.", false, true });
+    }
+}
+
 void WelcomePopup::goToStep (int newStep)
 {
     currentStep_ = juce::jlimit (0, totalSteps - 1, newStep);
+
+    // Re-scan on every visit so the note stays honest if a cable appeared since
+    // (e.g. the user came back to this step after running the guided install).
+    if (currentStep_ == cableStepIndex)
+        refreshCableStep();
 
     const auto& step = steps_.getReference (currentStep_);
     titleLabel_.setText (step.title, juce::dontSendNotification);
@@ -153,7 +185,8 @@ void WelcomePopup::goToStep (int newStep)
         auto* label = new juce::Label();
         label->setText (line.text, juce::dontSendNotification);
         label->setFont (juce::Font (juce::FontOptions (14.0f)));
-        label->setColour (juce::Label::textColourId, line.warn ? metricWarn : textNormal);
+        label->setColour (juce::Label::textColourId,
+                          line.warn ? metricWarn : line.good ? metricGood : textNormal);
         label->setJustificationType (juce::Justification::topLeft);
         addAndMakeVisible (label);
         bodyLines_.add (label);
@@ -173,6 +206,7 @@ void WelcomePopup::updateButtonVisibility()
     doneButton_.setVisible (onLast);
     supportButton_.setVisible (onLast);
     dontShowAgainToggle_.setVisible (onLast);
+    cableButton_.setVisible (currentStep_ == cableStepIndex && detectedCable_.isEmpty());
 }
 
 void WelcomePopup::finishAndClose()
@@ -186,14 +220,14 @@ void WelcomePopup::paint (juce::Graphics& g)
 {
     g.fillAll (background);
 
-    // Bullet points beside each body line, except warnings and continuation
+    // Bullet points beside each body line, except status lines and continuation
     // lines (a wrapped sentence must not look like two separate bullets).
     g.setColour (accent);
     g.setFont (juce::Font (juce::FontOptions (14.0f)));
     for (int i = 0; i < bodyLines_.size(); ++i)
     {
         const auto& line = steps_.getReference (currentStep_).lines.getReference (i);
-        if (line.warn || line.cont)
+        if (line.warn || line.cont || line.good)
             continue;
 
         auto b = bodyLines_.getUnchecked (i)->getBounds();
@@ -202,9 +236,9 @@ void WelcomePopup::paint (juce::Graphics& g)
                     juce::Justification::centredLeft);
     }
 
-    // Separator above the footer.
+    // Separator above the footer, which starts at getHeight() - 18 (inset) - 34.
     g.setColour (gridLine);
-    g.fillRect (16, getHeight() - 48, getWidth() - 32, 1);
+    g.fillRect (16, getHeight() - 58, getWidth() - 32, 1);
 }
 
 void WelcomePopup::resized()
@@ -250,9 +284,15 @@ void WelcomePopup::resized()
         label->setBounds (bodyArea.removeFromTop (lineH));
         bodyArea.removeFromTop (2);
     }
+
+    if (cableButton_.isVisible())
+    {
+        bodyArea.removeFromTop (10);
+        cableButton_.setBounds (bodyArea.removeFromTop (30).removeFromLeft (150));
+    }
 }
 
-void WelcomePopup::show (juce::PropertiesFile& config)
+void WelcomePopup::show (juce::PropertiesFile& config, juce::AudioDeviceManager& deviceManager)
 {
     // Only one walkthrough at a time: a second GUIDE click raises the existing
     // dialog instead of stacking a duplicate.
@@ -265,7 +305,7 @@ void WelcomePopup::show (juce::PropertiesFile& config)
     }
 
     juce::DialogWindow::LaunchOptions options;
-    options.content.setOwned (new WelcomePopup (config));
+    options.content.setOwned (new WelcomePopup (config, deviceManager));
     options.dialogTitle = "Welcome to Plugin Play";
     options.dialogBackgroundColour = Colours::background;
     options.escapeKeyTriggersCloseButton = true;

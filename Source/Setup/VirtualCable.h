@@ -36,9 +36,15 @@ namespace VirtualCable
     /** True if a device name looks like a known virtual audio cable. */
     bool nameLooksLikeCable (const juce::String& deviceName);
 
-    /** Scans all audio device types for an installed virtual cable.
-        Returns the matched device name, or an empty string if none is found. */
-    juce::String findInstalled (juce::AudioDeviceManager& deviceManager);
+    /** Looks through all audio device types for an installed virtual cable.
+        Returns the matched device name, or an empty string if none is found.
+
+        With rescan false it reads the device lists as already enumerated (fast —
+        JUCE keeps them fresh via Windows device-change notifications, and the
+        startup scan happens on demand if nothing has scanned yet). Pass true only
+        for an explicit user re-check: it forces a fresh driver scan, which can
+        block the message thread for seconds. */
+    juce::String findInstalled (juce::AudioDeviceManager& deviceManager, bool rescan);
 
     /** Reads the download page and returns the URL of the newest VBCABLE_Driver_PackN.zip.
         Falls back to fallbackZipUrl if the page can't be read or parsed. Blocking — call

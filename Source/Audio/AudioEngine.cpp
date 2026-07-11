@@ -834,6 +834,31 @@ void AudioEngine::loadSession()
             deviceState = devices->getFirstChildElement();
     }
 
+    // No saved device state (first launch): a plain initialise() would open the
+    // default input — the microphone — feeding live mic through the speakers. Hand
+    // it a state naming only the default output instead, so no input opens (the mic
+    // is never touched) until the user picks a source; the walkthrough points them
+    // at the INPUT dropdown. initialise() stores this as the chosen setup, so the
+    // no-input choice also persists until they do.
+    std::unique_ptr<juce::XmlElement> firstRunState;
+
+    if (deviceState == nullptr)
+    {
+        for (auto* type : deviceManager.getAvailableDeviceTypes())
+        {
+            const auto outputs = type->getDeviceNames (false);
+            if (outputs.isEmpty())
+                continue;
+
+            firstRunState = std::make_unique<juce::XmlElement> ("DEVICESETUP");
+            firstRunState->setAttribute ("deviceType", type->getTypeName());
+            firstRunState->setAttribute ("audioOutputDeviceName",
+                                         outputs [type->getDefaultDeviceIndex (false)]);
+            deviceState = firstRunState.get();
+            break;
+        }
+    }
+
     deviceManager.initialise (2, 2, deviceState, true);
     rebuildConnections();
 

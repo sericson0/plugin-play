@@ -95,6 +95,17 @@ private:
 };
 
 //==============================================================================
+/** Small icon button drawing circular "rescan" arrows (drawn by hand so it never
+    depends on the UI font shipping a refresh glyph). */
+class RefreshButton : public juce::Button
+{
+public:
+    RefreshButton() : juce::Button ("rescan") {}
+
+    void paintButton (juce::Graphics&, bool isHighlighted, bool isDown) override;
+};
+
+//==============================================================================
 class MainComponent : public juce::Component,
                       private juce::ChangeListener,
                       private juce::Timer
@@ -128,10 +139,19 @@ private:
     void updateStatusText();
     void updateScanButton();
 
-    // Redirect banner: a coloured strip shown while an app is being routed through
-    // Plugin Play, and briefly repurposed as a notice when that app quits.
-    void updateRedirectBanner();
+    // Header source readout (left of SUPPORT): names the app being sent through
+    // Plugin Play, briefly repurposed as a notice when that app quits.
+    void updateSourceIndicator();
     void checkRedirectedAppAlive();
+
+    // Swaps the header's VIRTUAL CABLE setup button for CHECK UPDATES once a cable
+    // is installed (setup stays reachable from HELP); the setup button returns if
+    // the cable disappears.
+    void updateHeaderButtons();
+    void checkForUpdates();
+
+    // Fresh device/app scan so sources that appeared after startup become selectable.
+    void rescanDevices();
 
     // Collapsible audio device area: collapsed keeps the input/output device
     // selectors; expanded adds channel selection plus driver / rate / buffer.
@@ -158,7 +178,8 @@ private:
 
     juce::TextButton scanButton       { "SCAN PLUGINS" };
     juce::TextButton cableButton      { "VIRTUAL CABLE" };
-    juce::TextButton donateButton     { "DONATE" };
+    juce::TextButton updateButton     { "CHECK UPDATES" };
+    juce::TextButton supportButton    { "SUPPORT" };
     juce::TextButton helpButton       { "HELP" };
     juce::TextButton presetsButton    { "PRESETS" };
     AlertButton      killButton       { "FX ON" };
@@ -175,6 +196,7 @@ private:
     juce::Label      bufferLabel { {}, "BUFFER" };
     juce::ComboBox   inputSelector;
     juce::ComboBox   outputSelector;
+    RefreshButton    rescanButton;
     juce::Label      inputChannelLabel  { {}, "INPUT PAIR" };
     juce::Label      outputChannelLabel { {}, "OUTPUT PAIR" };
     juce::ComboBox   inputChannelSelector;
@@ -213,13 +235,17 @@ private:
     juce::Label statusLabel;
     juce::Label cpuLabel;   // right-aligned CPU readout, tinted amber/red under load
 
-    // Banner strip shown above the meters while redirecting an app (and, for a few
-    // seconds, when that app quits). bannerShown drives layout so the band only takes
-    // vertical space when it's up.
-    juce::Label redirectBanner;
-    bool bannerShown = false;
+    // Header readout (right-aligned, left of SUPPORT) naming the app currently sent
+    // through Plugin Play — empty while the input is a plain device. Briefly shows
+    // an amber notice when the routed app quits.
+    juce::Label sourceIndicator;
     juce::String redirectNotice;   // transient "<app> closed" message; empty = none
     int redirectNoticeTicks = 0;   // 30 Hz ticks remaining to show the notice
+
+    // Whether a virtual cable is currently installed — decides which of the
+    // VIRTUAL CABLE / CHECK UPDATES buttons occupies the header slot.
+    bool cableInstalled = false;
+    bool checkingForUpdates = false;
 
     // Kept so a second HELP click brings the existing window to front instead of
     // stacking a duplicate. Null once the window closes (it self-deletes).

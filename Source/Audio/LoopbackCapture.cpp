@@ -94,6 +94,11 @@ std::vector<AudioSource> enumerateAudioSources()
         if (sessionPid == 0)
             continue;
 
+        // Never list Plugin Play itself — routing our own output back into our
+        // input would only build a feedback loop.
+        if (sessionPid == GetCurrentProcessId())
+            continue;
+
         AudioSessionState state = AudioSessionStateInactive;
         control->GetState (&state);
 
