@@ -144,6 +144,10 @@ private:
     void updateSourceIndicator();
     void checkRedirectedAppAlive();
 
+    /** Display name for the current app input: the friendly app name on macOS (the
+        engine identity there is a bundle id), the exe name minus suffix on Windows. */
+    juce::String friendlyAppInputName() const;
+
     // Swaps the header's VIRTUAL CABLE setup button for CHECK UPDATES once a cable
     // is installed (setup stays reachable from HELP); the setup button returns if
     // the cable disappears.

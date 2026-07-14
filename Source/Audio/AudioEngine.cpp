@@ -15,7 +15,7 @@ using IONode = juce::AudioProcessorGraph::AudioGraphIOProcessor;
 class CaptureSourceProcessor : public juce::AudioProcessor
 {
 public:
-    explicit CaptureSourceProcessor (LoopbackCapture& c)
+    explicit CaptureSourceProcessor (AppCapture& c)
         : juce::AudioProcessor (BusesProperties()
               .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
           capture (c) {}
@@ -44,7 +44,7 @@ public:
     void setStateInformation (const void*, int) override {}
 
 private:
-    LoopbackCapture& capture;
+    AppCapture& capture;
 };
 
 // Chain edits save after a short debounce; the long interval keeps autosaving
@@ -519,6 +519,72 @@ bool AudioEngine::isRedirectedAppRunning() const
     return AppRouting::isProcessRunning (redirectedPid);
 }
 
+//==============================================================================
+juce::String AudioEngine::selectAppInput (juce::uint32 pid, const juce::String& exe)
+{
+   #if JUCE_MAC
+    // Process-tap capture: the tap itself mutes the app's speaker output while we
+    // read its audio, so there is no cable and no routing state to persist/undo.
+    captureStartedRate = currentSampleRate();
+
+    if (! capture.start (pid, captureStartedRate))
+    {
+        return "Couldn't capture that app's audio. If macOS asked for permission, "
+               "allow System Audio Recording for Plugin Play in System Settings > "
+               "Privacy & Security, then pick the app again.";
+    }
+
+    capturedExecutable = exe;
+    useCaptureInput = true;
+    rebuildConnections();
+    scheduleSave();
+    sendChangeMessage();
+    return {};
+   #else
+    return setRedirectedApp (pid, exe);
+   #endif
+}
+
+void AudioEngine::clearAppInput()
+{
+   #if JUCE_MAC
+    if (useCaptureInput)
+        setDeviceInput();   // stops the tap (un-muting the app) + rebuild/save/broadcast
+   #else
+    clearRedirectedApp();
+   #endif
+}
+
+bool AudioEngine::isUsingAppInput() const
+{
+   #if JUCE_MAC
+    return useCaptureInput;
+   #else
+    return isRedirectingApp();
+   #endif
+}
+
+juce::String AudioEngine::appInputName() const
+{
+   #if JUCE_MAC
+    return useCaptureInput ? capturedExecutable : juce::String();
+   #else
+    return redirectedAppName();
+   #endif
+}
+
+bool AudioEngine::isAppInputRunning() const
+{
+   #if JUCE_MAC
+    if (! useCaptureInput)
+        return true;   // no app input — nothing to detect
+
+    return ProcessTapCapture::isProcessRunning (capture.targetPid());
+   #else
+    return isRedirectedAppRunning();
+   #endif
+}
+
 void AudioEngine::applyRedirect (juce::uint32 pid, const juce::String& exe,
                                  const juce::String& captureName)
 {
@@ -642,7 +708,15 @@ void AudioEngine::restoreInputSource (const juce::XmlElement& session)
         }
 
     if (chosen != 0)
+    {
+       #if JUCE_MAC
+        // The live tap path; a failure (e.g. revoked capture permission) is
+        // swallowed at startup — the session just stays on device input.
+        selectAppInput (chosen, exe);
+       #else
         setCaptureSource (chosen);
+       #endif
+    }
 }
 
 //==============================================================================
@@ -833,7 +907,15 @@ void AudioEngine::saveSession()
         wroteInputMode = true;
     }
 
-    if constexpr (enableLoopbackCapture)   // quarantined loopback path
+    // "capture" is the live app-input mode on macOS (process tap); on Windows it
+    // belongs to the quarantined loopback path and is only written when that's on.
+   #if JUCE_MAC
+    constexpr bool captureModeSaves = true;
+   #else
+    constexpr bool captureModeSaves = enableLoopbackCapture;
+   #endif
+
+    if constexpr (captureModeSaves)
     {
         if (! wroteInputMode && useCaptureInput && capturedExecutable.isNotEmpty())
         {
@@ -972,11 +1054,15 @@ void AudioEngine::loadSession()
 
                 auto& self = *weak;
 
-                // Restore the input routing now the output device is open. Re-applies an
-                // app→cable redirect (migrating legacy loopback "capture" sessions too);
-                // does nothing if the saved app isn't running this launch — the user
-                // re-picks from the dropdown.
+                // Restore the input routing now the output device is open. Windows
+                // re-applies an app→cable redirect (migrating legacy loopback "capture"
+                // sessions too); macOS re-creates the process tap. Does nothing if the
+                // saved app isn't running this launch — the user re-picks.
+               #if JUCE_MAC
+                self.restoreInputSource (*sharedSession);
+               #else
                 self.restoreRedirectFromSession (*sharedSession);
+               #endif
 
                 if (auto* chain = sharedSession->getChildByName ("CHAIN"))
                 {

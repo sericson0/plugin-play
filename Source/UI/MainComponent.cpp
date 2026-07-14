@@ -62,6 +62,9 @@ public:
         cableSetupButton.setTooltip ("Check for - or install - the virtual audio cable");
         cableSetupButton.onClick = [this] { CableSetupComponent::launch (deviceManager); };
         addAndMakeVisible (cableSetupButton);
+       #if ! JUCE_WINDOWS
+        cableSetupButton.setVisible (false);   // VB-CABLE is a Windows concept
+       #endif
 
         doc.setMultiLine (true);
         doc.setReadOnly (true);
@@ -1306,8 +1309,8 @@ void MainComponent::refreshInputSelector()
 
     auto* type = engine.deviceManager.getCurrentDeviceTypeObject();
     const auto selectedDevice = engine.deviceManager.getAudioDeviceSetup().inputDeviceName;
-    const bool redirecting = engine.isRedirectingApp();
-    const auto redirectedApp = engine.redirectedAppName();
+    const bool redirecting = engine.isUsingAppInput();
+    const auto redirectedApp = engine.appInputName();
 
     inputSelector.clear (juce::dontSendNotification);
 
@@ -1324,22 +1327,36 @@ void MainComponent::refreshInputSelector()
         }
     }
 
-    // 2) Running apps (ids captureItemBase + index). Picking one redirects that app's
-    //    audio into the cable and reads it back — Plugin Play wires the cable for you.
+    // 2) Running apps (ids captureItemBase + index). Windows: picking one redirects
+    //    that app's audio into the cable and reads it back. macOS: picking one taps
+    //    the app directly (its own speaker output goes quiet) — no cable at all.
     captureSources = engine.availableCaptureSources();
 
     if (! captureSources.empty())
     {
         inputSelector.addSeparator();
         if (auto* root = inputSelector.getRootMenu())
+           #if JUCE_MAC
+            root->addSectionHeader ("Capture an app (no cable needed)");
+           #else
             root->addSectionHeader ("Send an app through Plugin Play");
+           #endif
 
         for (size_t i = 0; i < captureSources.size(); ++i)
         {
             const auto& s = captureSources[i];
+           #if JUCE_MAC
+            // The Mac `executable` is a bundle id (com.spotify.client) — lead with
+            // the app's friendly name instead.
+            auto label = s.displayName.isNotEmpty()
+                             ? s.displayName
+                             : (s.executable.isNotEmpty() ? s.executable
+                                                          : "PID " + juce::String (s.pid));
+           #else
             auto label = s.executable.isNotEmpty() ? s.executable : ("PID " + juce::String (s.pid));
             if (s.displayName.isNotEmpty() && ! s.displayName.equalsIgnoreCase (s.executable))
                 label << "  \xe2\x80\x94  " << s.displayName;
+           #endif
             if (s.active)
                 label << "   [ACTIVE]";
 
@@ -1363,7 +1380,11 @@ void MainComponent::refreshInputSelector()
         else
         {
             const int id = captureItemBase + (int) captureSources.size();
+           #if JUCE_MAC
+            inputSelector.addItem (redirectedApp + "   [capturing]", id);
+           #else
             inputSelector.addItem (redirectedApp + "   [routed]", id);
+           #endif
             inputSelector.setSelectedId (id, juce::dontSendNotification);
         }
     }
@@ -1496,10 +1517,11 @@ void MainComponent::applyInputSelection()
 {
     const auto id = inputSelector.getSelectedId();
 
-    // An app: redirect its audio into the cable and read it back. The engine sets the
-    // input device to the cable's recording endpoint for us. If no cable is installed
-    // (or routing is unsupported), tell the user and offer the cable setup, then revert
-    // the selection to whatever the input device currently is.
+    // An app was picked. Windows: redirect its audio into the cable and read it back
+    // (the engine sets the input device to the cable's recording endpoint for us);
+    // if no cable is installed, tell the user and offer the cable setup. macOS: tap
+    // the app directly; a failure there is a capture-permission problem, not a cable
+    // one. Either way revert the dropdown to the real input device on failure.
     if (id >= captureItemBase)
     {
         const auto index = (size_t) (id - captureItemBase);
@@ -1507,12 +1529,16 @@ void MainComponent::applyInputSelection()
             return;
 
         const auto& source = captureSources[index];
-        const auto error = engine.setRedirectedApp (source.pid, source.executable);
+        const auto error = engine.selectAppInput (source.pid, source.executable);
 
         if (error.isNotEmpty())
         {
             buildDeviceSelectors();   // revert the dropdown to the real input device
 
+           #if JUCE_MAC
+            juce::AlertWindow::showMessageBoxAsync (
+                juce::MessageBoxIconType::InfoIcon, "Couldn't capture that app", error);
+           #else
             juce::AlertWindow::showOkCancelBox (
                 juce::MessageBoxIconType::InfoIcon, "Couldn't route that app",
                 error, "Set up cable", "Cancel", this,
@@ -1522,13 +1548,14 @@ void MainComponent::applyInputSelection()
                         if (r == 1 && safe != nullptr)
                             CableSetupComponent::launch (safe->engine.deviceManager);
                     }));
+           #endif
         }
         return;
     }
 
-    // A real audio input device: stop any app redirect, then apply the device.
-    if (engine.isRedirectingApp())
-        engine.clearRedirectedApp();
+    // A real audio input device: stop any app input, then apply the device.
+    if (engine.isUsingAppInput())
+        engine.clearAppInput();
 
     applyDeviceSelection();
 }
@@ -1895,15 +1922,10 @@ void MainComponent::updateSourceIndicator()
         text   = redirectNotice;
         colour = metricWarn;
     }
-    else if (engine.isRedirectingApp())
+    else if (engine.isUsingAppInput())
     {
-        // Persistent "we're routing this app" readout: just the program name,
-        // without its .exe suffix. \xe2\x96\xb6 = ▶
-        auto app = engine.redirectedAppName();
-        if (app.endsWithIgnoreCase (".exe"))
-            app = app.dropLastCharacters (4);
-
-        text << "\xe2\x96\xb6  " << app;
+        // Persistent "we're using this app as the input" readout. \xe2\x96\xb6 = ▶
+        text << "\xe2\x96\xb6  " << friendlyAppInputName();
     }
 
     sourceIndicator.setText (text, juce::dontSendNotification);
@@ -1912,6 +1934,7 @@ void MainComponent::updateSourceIndicator()
 
 void MainComponent::updateHeaderButtons()
 {
+   #if JUCE_WINDOWS
     // Once a cable is installed the VIRTUAL CABLE setup button has done its job, so
     // its header slot becomes CHECK UPDATES (cable setup stays reachable from HELP
     // and the walkthrough). If the cable is ever uninstalled, the setup button comes
@@ -1920,6 +1943,13 @@ void MainComponent::updateHeaderButtons()
 
     cableButton .setVisible (! cableInstalled);
     updateButton.setVisible (cableInstalled);
+   #else
+    // No cable in the macOS input model (the process tap does it all), so the
+    // header slot is always CHECK UPDATES.
+    cableInstalled = false;
+    cableButton .setVisible (false);
+    updateButton.setVisible (true);
+   #endif
 }
 
 void MainComponent::rescanDevices()
@@ -1990,18 +2020,40 @@ void MainComponent::checkForUpdates()
         });
 }
 
+juce::String MainComponent::friendlyAppInputName() const
+{
+    auto app = engine.appInputName();
+
+   #if JUCE_MAC
+    // The Mac identity is a bundle id — swap in the enumerated friendly name.
+    for (const auto& s : captureSources)
+        if (s.executable.equalsIgnoreCase (app) && s.displayName.isNotEmpty())
+            return s.displayName;
+   #else
+    if (app.endsWithIgnoreCase (".exe"))
+        app = app.dropLastCharacters (4);
+   #endif
+
+    return app;
+}
+
 void MainComponent::checkRedirectedAppAlive()
 {
-    if (! engine.isRedirectingApp() || engine.isRedirectedAppRunning())
+    if (! engine.isUsingAppInput() || engine.isAppInputRunning())
         return;
 
-    // The app we were routing has exited; audio would otherwise just go silent with a
-    // stale selection. Stop routing (restores the app's own output) and tell the user.
-    const auto app = engine.redirectedAppName();
-    engine.clearRedirectedApp();
+    // The app we were using as the input has exited; audio would otherwise just go
+    // silent with a stale selection. Stop (Windows restores the app's own output;
+    // macOS drops the tap) and tell the user.
+    const auto app = friendlyAppInputName();
+    engine.clearAppInput();
     buildDeviceSelectors();
 
+   #if JUCE_MAC
+    redirectNotice      = app + " closed \xe2\x80\x94 capture stopped";
+   #else
     redirectNotice      = app + " closed \xe2\x80\x94 routing stopped";
+   #endif
     redirectNoticeTicks = 30 * 6;   // ~6 seconds at 30 Hz
     updateSourceIndicator();
 }

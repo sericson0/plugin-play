@@ -14,6 +14,14 @@ project(PluginPlay VERSION 1.0.0 LANGUAGES CXX C)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# The process-tap capture module is Objective-C++ (Core Audio's tap API is an
+# Objective-C class).
+if (APPLE)
+    enable_language(OBJCXX)
+    set(CMAKE_OBJCXX_STANDARD 17)
+    set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
+endif()
+
 # Statically link the MSVC runtime (/MT) so the app launches on a clean Windows
 # machine that has no Visual C++ redistributable — the "single simple download"
 # goal. Must be set BEFORE JUCE is fetched so JUCE's own targets use the same
@@ -80,6 +88,14 @@ target_sources(PluginPlay
         Source/UI/SupportPanel.cpp
         Source/UI/WelcomePopup.cpp
 )
+
+if (APPLE)
+    # Per-app capture via Core Audio process taps (macOS 14.4+). ARC just for this
+    # file — JUCE itself builds without it.
+    target_sources(PluginPlay PRIVATE Source/Audio/ProcessTap.mm)
+    set_source_files_properties(Source/Audio/ProcessTap.mm
+        PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+endif()
 
 target_compile_definitions(PluginPlay
     PRIVATE

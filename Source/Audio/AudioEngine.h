@@ -3,6 +3,9 @@
 #include <JuceHeader.h>
 #include "AppRouting.h"
 #include "LoopbackCapture.h"
+#if JUCE_MAC
+ #include "ProcessTap.h"
+#endif
 
 namespace play
 {
@@ -10,6 +13,16 @@ namespace play
 class MasterProcessor;
 class PluginNode;
 class CaptureSourceProcessor;
+
+/** The platform's app-audio-capture backend: a Core Audio process tap on macOS
+    (the live app-input path there), process loopback on Windows (quarantined —
+    the cable redirect is the live path; see setRedirectedApp). Both expose the
+    same start/stop/read interface. */
+#if JUCE_MAC
+using AppCapture = ProcessTapCapture;
+#else
+using AppCapture = LoopbackCapture;
+#endif
 
 //==============================================================================
 /** One entry in the serial FX chain. */
@@ -76,6 +89,30 @@ public:
     //==============================================================================
     /** Running apps that can be picked as an input source (one entry per app). */
     std::vector<AudioSource> availableCaptureSources() const { return enumerateAudioSources(); }
+
+    //==============================================================================
+    /** Selects a running app as the input source, using the platform's mechanism:
+        Windows routes the app's output into the virtual cable and reads it back
+        (setRedirectedApp); macOS taps the app's audio directly (process tap, the
+        dry signal muted at the speakers by the tap itself — no cable involved).
+        Returns "" on success, otherwise a human-readable error. */
+    juce::String selectAppInput (juce::uint32 pid, const juce::String& exe);
+
+    /** Stops app input: Windows restores the app's own output; macOS destroys the
+        tap (un-muting the app). Leaves the input device selection as-is. */
+    void clearAppInput();
+
+    /** True while an app (rather than a device) is the input source. */
+    bool isUsingAppInput() const;
+
+    /** Identity of the current app input ("" when none): exe name on Windows,
+        bundle id on macOS. */
+    juce::String appInputName() const;
+
+    /** True unless app input is active AND that app's process has exited — the UI
+        polls this to stop routing/capture and tell the user instead of letting the
+        audio silently die. Returns true when no app input is active. */
+    bool isAppInputRunning() const;
 
     /** App-to-cable input. Picking an app redirects THAT app's audio output into the
         virtual cable (via AppRouting / per-app device routing) and points Plugin
@@ -236,9 +273,11 @@ private:
     // never mutes an endpoint and legacy mode="capture" sessions migrate to redirect.
     static constexpr bool enableLoopbackCapture = false;
 
-    // Driverless process-loopback capture (quarantined). When useCaptureInput is true
-    // the chain head is captureSourceNode (fed by `capture`) instead of device input.
-    LoopbackCapture capture;
+    // App-audio capture backend. On macOS this is the live app-input path (process
+    // tap); on Windows it's the quarantined process-loopback capture. When
+    // useCaptureInput is true the chain head is captureSourceNode (fed by `capture`)
+    // instead of device input.
+    AppCapture capture;
     bool useCaptureInput = false;
     double captureStartedRate = 0.0;
     // Executable of the current capture target, remembered so the source survives
