@@ -162,11 +162,14 @@ private:
     void buildDeviceSelectors();
     void refreshDeviceTypes();
     void refreshInputSelector();
+    void refreshMonitorSelector();
     void refreshChannelSelectors();
     void refreshSampleRates();
     void refreshBufferSizes();
     void applyInputSelection();
     void applyDeviceSelection();
+    void applyMonitorSelection();
+    void applyMonitorPairSelection();
     void applyChannelSelection (bool isInput);
     void applySampleRate (double rate);
     void applyBufferSize (int frames);
@@ -199,8 +202,12 @@ private:
     RefreshButton    rescanButton;
     juce::Label      inputChannelLabel  { {}, "INPUT PAIR" };
     juce::Label      outputChannelLabel { {}, "OUTPUT PAIR" };
+    juce::Label      monitorLabel       { {}, "MONITOR OUTPUT" };
+    juce::Label      monitorPairLabel   { {}, "MONITOR PAIR" };
     juce::ComboBox   inputChannelSelector;
     juce::ComboBox   outputChannelSelector;
+    juce::ComboBox   monitorSelector;
+    juce::ComboBox   monitorPairSelector;
     juce::ComboBox   deviceTypeSelector;
     juce::ComboBox   sampleRateSelector;
     juce::ComboBox   bufferSizeSelector;
@@ -228,6 +235,12 @@ private:
     // Synthetic driver-dropdown item that enables ASIO on demand (ASIO isn't scanned
     // at startup because a flaky driver can hang the scan). Well above real type ids.
     static constexpr int asioEnableItemId = 9000;
+
+    // MONITOR dropdown: "None" first, then output devices (ids monitorNoneId+1 ..
+    // monitorNoneId+monitorDeviceCount), optionally followed by one synthetic entry
+    // for a saved-but-absent device (selectable but inert until it reappears).
+    static constexpr int monitorNoneId = 1;
+    int monitorDeviceCount = 0;
 
     juce::Viewport viewport;
     ChainView chainView { engine };

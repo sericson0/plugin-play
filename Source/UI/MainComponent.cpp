@@ -554,7 +554,7 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
     }
 
     for (auto* l : { &inputLabel, &outputLabel, &inputChannelLabel, &outputChannelLabel,
-                     &driverLabel, &rateLabel, &bufferLabel })
+                     &monitorLabel, &monitorPairLabel, &driverLabel, &rateLabel, &bufferLabel })
     {
         l->setFont (juce::Font (juce::FontOptions (11.0f, juce::Font::bold)));
         l->setColour (juce::Label::textColourId, gridText);
@@ -576,6 +576,13 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
     outputChannelSelector.setTextWhenNoChoicesAvailable ("-");
     inputChannelSelector .onChange = [this] { if (! updatingSelectors) applyChannelSelection (true); };
     outputChannelSelector.onChange = [this] { if (! updatingSelectors) applyChannelSelection (false); };
+
+    monitorSelector.setTextWhenNoChoicesAvailable ("No outputs");
+    monitorSelector.setTextWhenNothingSelected ("None");
+    monitorSelector.onChange = [this] { if (! updatingSelectors) applyMonitorSelection(); };
+
+    monitorPairSelector.setTextWhenNoChoicesAvailable ("-");
+    monitorPairSelector.onChange = [this] { if (! updatingSelectors) applyMonitorPairSelection(); };
 
     deviceTypeSelector.onChange = [this]
     {
@@ -613,6 +620,11 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
     outputSelector      .setTooltip ("Audio output device - where processed audio is sent");
     inputChannelSelector .setTooltip ("Which channel pair of the input device to capture");
     outputChannelSelector.setTooltip ("Which channel pair of the output device to play to");
+    monitorSelector      .setTooltip ("Optional second output that mirrors the main output - e.g. your "
+                                      "interface's headphone jack or booth speakers. Uses shared Windows "
+                                      "Audio so it runs alongside ASIO, and plays a fraction of a second "
+                                      "behind the main output (fine for a separate room or headphones)");
+    monitorPairSelector  .setTooltip ("Which channel pair of the monitor device to play to");
     deviceTypeSelector  .setTooltip ("Audio driver type. Pick 'Enable ASIO' to turn on low-latency ASIO "
                                      "for your interface (loaded on demand so a driver can't slow startup)");
     sampleRateSelector  .setTooltip ("Sample rate - 'Auto' follows your source to avoid an extra resample");
@@ -665,6 +677,8 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
     addAndMakeVisible (outputChannelLabel);
     addAndMakeVisible (inputChannelSelector);
     addAndMakeVisible (outputChannelSelector);
+    addAndMakeVisible (monitorSelector);
+    addAndMakeVisible (monitorPairSelector);
     addAndMakeVisible (deviceTypeSelector);
     addAndMakeVisible (sampleRateSelector);
     addAndMakeVisible (bufferSizeSelector);
@@ -675,6 +689,8 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
     // rate and buffer controls only show while the audio area is expanded.
     juce::Component* expandedControls[] { &inputChannelLabel, &outputChannelLabel,
                                           &inputChannelSelector, &outputChannelSelector,
+                                          &monitorLabel, &monitorSelector,
+                                          &monitorPairLabel, &monitorPairSelector,
                                           &driverLabel, &deviceTypeSelector,
                                           &rateLabel, &bufferLabel,
                                           &sampleRateSelector, &bufferSizeSelector,
@@ -861,7 +877,7 @@ void MainComponent::resized()
     // ── Device area (collapsible): input / output devices are always shown;
     //    expanding adds channel selection plus the driver / rate / buffer row.
     //    The expand/collapse toggle sits centred at the bottom. ─
-    deviceBarBounds = area.removeFromTop (audioExpanded ? 216 : 94);
+    deviceBarBounds = area.removeFromTop (audioExpanded ? 266 : 94);
     auto bar = deviceBarBounds.reduced (16, 10);
 
     audioToggleButton.setBounds (bar.removeFromBottom (24).withSizeKeepingCentre (170, 24));
@@ -895,6 +911,16 @@ void MainComponent::resized()
         outputChannelLabel.setBounds (channelLabels);
         inputChannelSelector .setBounds (channelCombos.removeFromLeft (barHalf).withTrimmedRight (8));
         outputChannelSelector.setBounds (channelCombos);
+
+        // Monitor (second) output: device on the left, its channel pair on the right.
+        bar.removeFromTop (10);
+        auto monitorLabels = bar.removeFromTop (14);
+        auto monitorCombos = bar.removeFromTop (26);
+
+        monitorLabel    .setBounds (monitorLabels.removeFromLeft (barHalf).withTrimmedRight (8));
+        monitorPairLabel.setBounds (monitorLabels);
+        monitorSelector .setBounds (monitorCombos.removeFromLeft (barHalf).withTrimmedRight (8));
+        monitorPairSelector.setBounds (monitorCombos);
 
         bar.removeFromTop (12);
         auto settingsLabels = bar.removeFromTop (14);
@@ -1285,11 +1311,74 @@ void MainComponent::buildDeviceSelectors()
     }
 
     refreshInputSelector();
+    refreshMonitorSelector();
     refreshDeviceTypes();
     refreshChannelSelectors();
     refreshSampleRates();
     refreshBufferSizes();
     checkSampleRate();
+}
+
+void MainComponent::refreshMonitorSelector()
+{
+    const juce::ScopedValueSetter<bool> guard (updatingSelectors, true);
+
+    monitorSelector.clear (juce::dontSendNotification);
+    monitorSelector.addItem ("None", monitorNoneId);
+
+    const auto current    = engine.monitorOutputName();
+    const auto mainOutput = engine.deviceManager.getAudioDeviceSetup().outputDeviceName;
+    const auto names      = engine.availableMonitorOutputs();
+    monitorDeviceCount = names.size();
+
+    int id = monitorNoneId + 1;
+    bool found = false;
+
+    for (const auto& name : names)
+    {
+        // The monitor is a second destination, so leave the main output out of the
+        // list — sending to the same device would just double the audio. (id keeps
+        // advancing so the id range still lines up with monitorDeviceCount.)
+        if (name != mainOutput)
+        {
+            monitorSelector.addItem (name, id);
+            if (name == current)
+            {
+                monitorSelector.setSelectedId (id, juce::dontSendNotification);
+                found = true;
+            }
+        }
+        ++id;
+    }
+
+    if (current.isEmpty())
+        monitorSelector.setSelectedId (monitorNoneId, juce::dontSendNotification);
+    else if (! found)
+    {
+        // A saved monitor device that isn't present right now (unplugged) stays
+        // visible as the selection; the engine keeps the intent and reopens it
+        // when it's back. Re-picking this entry is inert.
+        monitorSelector.addItem (current + "   [not connected]", id);
+        monitorSelector.setSelectedId (id, juce::dontSendNotification);
+    }
+
+    // The monitor device's channel pairs, in the same "1+2" form as the main
+    // device's pair selectors. Empty (and disabled) while the monitor is off.
+    monitorPairSelector.clear (juce::dontSendNotification);
+
+    const auto numChannels = engine.monitorOutputChannels();
+    for (int start = 0; start < numChannels; start += 2)
+    {
+        auto text = juce::String (start + 1);
+        if (start + 1 < numChannels)
+            text << "+" << start + 2;
+
+        monitorPairSelector.addItem (text, start / 2 + 1);
+    }
+
+    monitorPairSelector.setSelectedId (engine.monitorOutputPairStart() / 2 + 1,
+                                       juce::dontSendNotification);
+    monitorPairSelector.setEnabled (monitorPairSelector.getNumItems() > 1);
 }
 
 void MainComponent::refreshInputSelector()
@@ -1552,6 +1641,42 @@ void MainComponent::applyDeviceSelection()
     // setAudioDeviceSetup broadcasts a change; buildDeviceSelectors() then refreshes.
 }
 
+void MainComponent::applyMonitorSelection()
+{
+    const auto id = monitorSelector.getSelectedId();
+
+    // The synthetic "[not connected]" entry isn't an openable device; reselecting
+    // it changes nothing.
+    if (id > monitorNoneId + monitorDeviceCount)
+        return;
+
+    const auto name  = id == monitorNoneId ? juce::String() : monitorSelector.getText();
+    const auto error = engine.setMonitorOutput (name);
+
+    if (error.isNotEmpty())
+    {
+        buildDeviceSelectors();   // revert the dropdown to the engine's actual state
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+                                                "Couldn't open monitor output", error);
+    }
+}
+
+void MainComponent::applyMonitorPairSelection()
+{
+    const auto id = monitorPairSelector.getSelectedId();
+    if (id <= 0)
+        return;
+
+    const auto error = engine.setMonitorOutputPair (2 * (id - 1));
+
+    if (error.isNotEmpty())
+    {
+        buildDeviceSelectors();   // revert the dropdown to the engine's actual state
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+                                                "Couldn't change monitor channels", error);
+    }
+}
+
 void MainComponent::applyChannelSelection (bool isInput)
 {
     auto* device = engine.deviceManager.getCurrentAudioDevice();
@@ -1766,6 +1891,8 @@ void MainComponent::setAudioExpanded (bool shouldExpand)
 
     juce::Component* expandedControls[] { &inputChannelLabel, &outputChannelLabel,
                                           &inputChannelSelector, &outputChannelSelector,
+                                          &monitorLabel, &monitorSelector,
+                                          &monitorPairLabel, &monitorPairSelector,
                                           &driverLabel, &deviceTypeSelector,
                                           &rateLabel, &bufferLabel,
                                           &sampleRateSelector, &bufferSizeSelector,

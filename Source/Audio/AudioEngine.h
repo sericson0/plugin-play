@@ -3,6 +3,7 @@
 #include <JuceHeader.h>
 #include "AppRouting.h"
 #include "LoopbackCapture.h"
+#include "MonitorOutput.h"
 
 namespace play
 {
@@ -111,6 +112,25 @@ public:
     juce::String capturedSourceName() const         { return capturedExecutable; }
 
     //==============================================================================
+    /** Optional second output mirroring the main one (headphones / booth). Always
+        opens shared-mode WASAPI so it can run alongside ASIO or exclusive-mode
+        mains; a drift-compensated resampler keeps the two devices' independent
+        clocks in step. Persisted with the session. */
+    juce::StringArray availableMonitorOutputs()     { return MonitorOutput::availableDevices (deviceManager); }
+
+    /** Opens (or, with an empty name, turns off) the monitor output on its first
+        channel pair. Returns "" on success, otherwise a human-readable error. */
+    juce::String setMonitorOutput (const juce::String& deviceName);
+
+    /** Moves the monitor to the stereo pair starting at this channel (0 = "1+2"). */
+    juce::String setMonitorOutputPair (int startChannel);
+
+    juce::String monitorOutputName() const          { return monitorOutputIntent; }
+    int monitorOutputPairStart() const              { return monitorPairIntent; }
+    int monitorOutputChannels() const               { return monitorOut.outputChannelCount(); }
+    bool isMonitorOutputRunning() const             { return monitorOut.isRunning(); }
+
+    //==============================================================================
     /** Restores the most recently removed plugin (state and position intact).
         Single level of undo. */
     bool canUndoRemove() const noexcept             { return lastRemovedSlot != nullptr; }
@@ -152,7 +172,13 @@ private:
                                                float* const* outputChannelData, int numOutputChannels,
                                                int numSamples,
                                                const juce::AudioIODeviceCallbackContext&) override;
-        void audioDeviceAboutToStart (juce::AudioIODevice* device) override { inner.audioDeviceAboutToStart (device); }
+        void audioDeviceAboutToStart (juce::AudioIODevice* device) override
+        {
+            // Tell the monitor path the rate of the samples it's about to be fed.
+            owner.monitorOut.setSourceFormat (device->getCurrentSampleRate(),
+                                              device->getCurrentBufferSizeSamples());
+            inner.audioDeviceAboutToStart (device);
+        }
         void audioDeviceStopped() override                                  { inner.audioDeviceStopped(); }
 
     private:
@@ -183,6 +209,15 @@ private:
     double currentSampleRate() const;
     int currentBlockSize() const;
 
+    /** The current main output device name — the monitor output is always kept
+        distinct from it (opening the same endpoint twice just doubles the audio). */
+    juce::String mainOutputName() const { return deviceManager.getAudioDeviceSetup().outputDeviceName; }
+
+    /** If the monitor output has ended up pointed at the main output device (the user
+        switched the main output onto it, or a missing main device fell back to it),
+        drop the monitor so it can't double the signal. */
+    void dropMonitorIfItIsMainOutput();
+
     /** Registers the device types that are safe to scan on the message thread at
         startup (WASAPI + DirectSound). Called before the device manager is initialised
         so JUCE doesn't add + scan its full default set (which includes the hang-prone
@@ -198,6 +233,17 @@ private:
     juce::AudioProcessorGraph::NodeID captureSourceNodeID;
     MasterProcessor* master = nullptr;
     std::vector<PluginSlotInfo> slots;
+
+    // Second output path (headphones / booth). The intent is the device + pair the
+    // user chose, kept even if opening fails (it may just be unplugged today) so it
+    // persists and comes back next launch — same philosophy as ghost slots.
+    MonitorOutput monitorOut;
+    juce::String monitorOutputIntent;
+    int monitorPairIntent = 0;
+    // The main-device sample rate the monitor was last opened to match. If the main
+    // rate changes (Auto-match reopening the device), the monitor is reopened so it
+    // tracks the new rate instead of resampling everything for the rest of the session.
+    double monitorMatchedRate = 0.0;
 
     // App-to-cable redirect state: the exe currently routed into the cable (empty =
     // none) and the live PID we set the per-app override on (needed to clear it).
