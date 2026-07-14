@@ -6,6 +6,11 @@
 #include "../Setup/UpdateCheck.h"
 #include "BinaryData.h"
 
+#if JUCE_MAC
+ #include "../Setup/BlackHole.h"
+ #include "../Audio/ProcessTap.h"
+#endif
+
 namespace play
 {
 
@@ -497,7 +502,14 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
     : engine (engineToUse), scanner (scannerToUse)
 {
     scanButton.onClick      = [this] { showScanMenu(); };
+   #if JUCE_MAC
+    // On macOS the "virtual device" is BlackHole (the fallback used when process
+    // taps aren't available); the header button opens its guided setup.
+    cableButton.setButtonText ("AUDIO ROUTING");
+    cableButton.onClick     = [this] { BlackHoleSetupComponent::launch (engine.deviceManager); };
+   #else
     cableButton.onClick     = [this] { CableSetupComponent::launch (engine.deviceManager); };
+   #endif
     updateButton.onClick    = [this] { checkForUpdates(); };
     supportButton.onClick   = [this] { SupportPanel::launch(); };
     helpButton.onClick      = [this] { showHelp(); };
@@ -519,7 +531,11 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
     addPluginButton.onClick = [this] { showAddPluginMenu (addPluginButton.getScreenPosition()); };
 
     scanButton    .setTooltip ("Scan for installed VST3 plugins, or manage extra scan folders");
+   #if JUCE_MAC
+    cableButton   .setTooltip ("Set up BlackHole to route another app's audio through Plugin Play");
+   #else
     cableButton   .setTooltip ("Set up the virtual audio cable that captures your DJ software");
+   #endif
     updateButton  .setTooltip ("Check GitHub for a newer version of Plugin Play");
     supportButton .setTooltip ("Support Plugin Play - Card / Apple Pay, Venmo or Zelle");
     helpButton    .setTooltip ("Open the Plugin Play help & documentation (and the GUIDE walkthrough)");
@@ -1943,9 +1959,25 @@ void MainComponent::updateHeaderButtons()
 
     cableButton .setVisible (! cableInstalled);
     updateButton.setVisible (cableInstalled);
+   #elif JUCE_MAC
+    if (ProcessTapCapture::isSupported())
+    {
+        // macOS 14.4+: process taps are driverless, so no virtual device is needed
+        // and the header slot is always CHECK UPDATES.
+        cableInstalled = true;
+        cableButton .setVisible (false);
+        updateButton.setVisible (true);
+    }
+    else
+    {
+        // macOS 11–14.3: the BlackHole virtual device is the routing path. The
+        // AUDIO ROUTING setup button shows until BlackHole is installed, then gives
+        // its slot to CHECK UPDATES (setup stays reachable from HELP).
+        cableInstalled = BlackHole::findInstalled (engine.deviceManager, false).isNotEmpty();
+        cableButton .setVisible (! cableInstalled);
+        updateButton.setVisible (cableInstalled);
+    }
    #else
-    // No cable in the macOS input model (the process tap does it all), so the
-    // header slot is always CHECK UPDATES.
     cableInstalled = false;
     cableButton .setVisible (false);
     updateButton.setVisible (true);

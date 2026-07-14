@@ -46,6 +46,12 @@ public:
     ProcessTapCapture();
     ~ProcessTapCapture();
 
+    /** True if Core Audio process taps are available at runtime (macOS 14.4+).
+        On older systems the tap APIs are weak-linked to null, so start() always
+        fails and the app falls back to the BlackHole virtual-device path. Cheap;
+        safe to call from the UI to decide which input model to present. */
+    static bool isSupported();
+
     /** Starts tapping targetPid, delivering stereo frames at the given engine
         sample rate (resampling internally if the tap runs at another rate).
         Retargeting is a stop() + start(). Returns false if the process has no

@@ -79,6 +79,11 @@ std::vector<AudioSource> enumerateAudioSources()
 {
     std::vector<AudioSource> sources;
 
+    // The process-object list and per-process properties are macOS 14.4+. On older
+    // systems there is no app-capture list (the BlackHole device path is used
+    // instead), so return empty and let the UI hide the "Capture an app" section.
+    if (__builtin_available (macOS 14.4, *))
+    {
     // Size then fetch the HAL's process object list.
     auto address = propertyAddress (kAudioHardwarePropertyProcessObjectList);
     UInt32 dataSize = 0;
@@ -155,6 +160,7 @@ std::vector<AudioSource> enumerateAudioSources()
             return a.active;
         return a.displayName.compareIgnoreCase (b.displayName) < 0;
     });
+    }  // __builtin_available (macOS 14.4)
 
     return sources;
 }
@@ -232,41 +238,51 @@ struct ProcessTapCapture::Impl : private juce::Timer
     //==========================================================================
     bool createTap()
     {
-        const auto processObject = processObjectForPid ((pid_t) pid.load());
-        if (processObject == kAudioObjectUnknown)
-            return failed ("process has no audio presence");
-
-        // The tap: stereo mixdown of the one process, private (invisible to
-        // other HAL clients), muting the app's own speaker output while tapped.
-        // Creating it triggers the "System Audio Recording" TCC prompt on the
-        // very first use; a denial makes AudioHardwareCreateProcessTap fail.
-        CATapDescription* description =
-            [[CATapDescription alloc] initStereoMixdownOfProcesses: @[ @(processObject) ]];
-        description.name         = @"Plugin Play tap";
-        description.privateTap   = YES;
-        description.muteBehavior = CATapMutedWhenTapped;
-
-        if (AudioHardwareCreateProcessTap (description, &tap) != noErr || tap == kAudioObjectUnknown)
+        // The tap API is macOS 14.4+. This is belt-and-braces: start() already
+        // refuses on older systems, but the guard also keeps the weak-linked
+        // symbols from ever being called where they resolve to null.
+        if (__builtin_available (macOS 14.4, *))
         {
-            tap = kAudioObjectUnknown;
-            return failed ("tap creation failed (permission denied?)");
+            const auto processObject = processObjectForPid ((pid_t) pid.load());
+            if (processObject == kAudioObjectUnknown)
+                return failed ("process has no audio presence");
+
+            // The tap: stereo mixdown of the one process, private (invisible to
+            // other HAL clients), muting the app's own speaker output while tapped.
+            // Creating it triggers the "System Audio Recording" TCC prompt on the
+            // very first use; a denial makes AudioHardwareCreateProcessTap fail.
+            CATapDescription* description =
+                [[CATapDescription alloc] initStereoMixdownOfProcesses: @[ @(processObject) ]];
+            description.name         = @"Plugin Play tap";
+            description.privateTap   = YES;
+            description.muteBehavior = CATapMutedWhenTapped;
+
+            if (AudioHardwareCreateProcessTap (description, &tap) != noErr || tap == kAudioObjectUnknown)
+            {
+                tap = kAudioObjectUnknown;
+                return failed ("tap creation failed (permission denied?)");
+            }
+
+            tapUID = [description.UUID UUIDString];
+
+            // The tap's stream format tells us the rate the frames will arrive at.
+            AudioStreamBasicDescription format {};
+            if (getProperty (tap, kAudioTapPropertyFormat, format) && format.mSampleRate > 0)
+                tapRate = format.mSampleRate;
+            else
+                tapRate = engineRate;
+
+            ratio.store (tapRate / engineRate);
+            return true;
         }
 
-        tapUID = [description.UUID UUIDString];
-
-        // The tap's stream format tells us the rate the frames will arrive at.
-        AudioStreamBasicDescription format {};
-        if (getProperty (tap, kAudioTapPropertyFormat, format) && format.mSampleRate > 0)
-            tapRate = format.mSampleRate;
-        else
-            tapRate = engineRate;
-
-        ratio.store (tapRate / engineRate);
-        return true;
+        return failed ("process taps require macOS 14.4");
     }
 
     bool createAggregateAndStart()
     {
+      if (__builtin_available (macOS 14.4, *))
+      {
         // Wrap the tap in a private aggregate device so a plain IOProc can pull
         // its frames. The current default output is included as the aggregate's
         // clock-master subdevice (the proven-stable composition); the tap gets
@@ -312,6 +328,9 @@ struct ProcessTapCapture::Impl : private juce::Timer
             return failed ("device start failed");
 
         return true;
+      }
+
+      return failed ("process taps require macOS 14.4");
     }
 
     void destroyCoreAudioObjects()
@@ -331,7 +350,8 @@ struct ProcessTapCapture::Impl : private juce::Timer
 
         if (tap != kAudioObjectUnknown)
         {
-            AudioHardwareDestroyProcessTap (tap);   // un-mutes the tapped app
+            if (__builtin_available (macOS 14.4, *))
+                AudioHardwareDestroyProcessTap (tap);   // un-mutes the tapped app
             tap = kAudioObjectUnknown;
         }
 
@@ -612,8 +632,19 @@ struct ProcessTapCapture::Impl : private juce::Timer
 ProcessTapCapture::ProcessTapCapture()  : impl (std::make_unique<Impl>()) {}
 ProcessTapCapture::~ProcessTapCapture() { impl->shutdown(); }
 
+bool ProcessTapCapture::isSupported()
+{
+    if (__builtin_available (macOS 14.4, *))
+        return true;
+
+    return false;
+}
+
 bool ProcessTapCapture::start (juce::uint32 targetPid, double sampleRate)
 {
+    if (! isSupported())
+        return false;
+
     return impl->start (targetPid, juce::jlimit (8000.0, 384000.0, sampleRate));
 }
 

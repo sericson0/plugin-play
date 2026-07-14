@@ -3,11 +3,13 @@
 # the Steinberg VST3 SDK under their GPLv3 grants (see THIRD_PARTY_NOTICES.md).
 cmake_minimum_required(VERSION 3.22)
 
-# macOS: universal binary (Apple silicon + Intel) and a 14.4 OS floor — the
-# first release with Core Audio process taps (CATapDescription), the per-app
-# capture API the Mac input model is built on. Must be set before project().
+# macOS: universal binary (Apple silicon + Intel). The OS floor is 11.0 (Big Sur)
+# so the app runs on older Macs too: Core Audio process taps (macOS 14.4+) are the
+# preferred driverless per-app capture, but they are weak-linked and runtime-gated
+# (see ProcessTap.mm) so 11.0–14.3 falls back to the BlackHole virtual-device path.
+# Must be set before project().
 set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "")
-set(CMAKE_OSX_DEPLOYMENT_TARGET "14.4" CACHE STRING "")
+set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "")
 
 project(PluginPlay VERSION 1.0.0 LANGUAGES CXX C)
 
@@ -82,6 +84,7 @@ target_sources(PluginPlay
         Source/Plugins/PluginScanner.cpp
         Source/Setup/UpdateCheck.cpp
         Source/Setup/VirtualCable.cpp
+        Source/Setup/BlackHole.cpp
         Source/UI/MainComponent.cpp
         Source/UI/ChainView.cpp
         Source/UI/PluginPicker.cpp
