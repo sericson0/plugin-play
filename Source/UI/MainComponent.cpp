@@ -175,7 +175,7 @@ private:
     {
         addHeading ("PLUGIN PLAY - Version " + juce::JUCEApplication::getInstance()->getApplicationVersion());
         addBody (
-            "Plugin Play is a user-friendly host for VST3 effects. "
+            "Plugin Play is a user-friendly host for " + pluginFormatsLabel + " effects. "
                  "Easily add EQ, dehissing, limiters and more. "
                  "It can connect to any audio source or DJ software.");
 
@@ -255,9 +255,9 @@ private:
     void populatePlugins()
     {
         addHeading ("SCANNING FOR PLUGINS");
-        addBody ("Your VST3 effects are scanned automatically on first launch. Run "
-                 "SCAN PLUGINS again after installing new plugins, or use its menu "
-                 "to add folders outside the standard VST3 locations.");
+        addBody ("Your " + pluginFormatsLabel + " effects are scanned automatically on first "
+                 "launch. Run SCAN PLUGINS again after installing new plugins, or use its menu "
+                 "to add folders outside the standard plugin locations.");
 
         addHeading ("BUILDING A CHAIN");
         addBody ("+ Add Plugin appends an effect. Audio flows top to bottom, so the "
@@ -294,7 +294,7 @@ private:
 
         addHeading ("A PLUGIN DOESN'T APPEAR");
         addBody ("Run SCAN PLUGINS again, using its menu to add the plugin's folder "
-                 "if needed. Only VST3 effect plugins are supported.");
+                 "if needed. Only " + pluginFormatsLabel + " effect plugins are supported.");
 
         addHeading ("CRACKLES, DROPOUTS OR RESAMPLING");
         addBody ("Raise the BUFFER size in Audio Settings, use 'Auto - match source' "
@@ -530,7 +530,7 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
     // buttons rather than a filled orange call-to-action.
     addPluginButton.onClick = [this] { showAddPluginMenu (addPluginButton.getScreenPosition()); };
 
-    scanButton    .setTooltip ("Scan for installed VST3 plugins, or manage extra scan folders");
+    scanButton    .setTooltip ("Scan for installed " + pluginFormatsLabel + " plugins, or manage extra scan folders");
    #if JUCE_MAC
     cableButton   .setTooltip ("Set up BlackHole to route another app's audio through Plugin Play");
    #else
@@ -1031,7 +1031,7 @@ void MainComponent::showAddPluginMenu (juce::Point<int> screenPosition)
     {
         juce::PopupMenu menu;
         menu.addItem (1, scanner.isScanning() ? "Scanning for plugins..."
-                                              : "No VST3 plugins found - scan now",
+                                              : "No plugins found - scan now",
                       ! scanner.isScanning());
 
         menu.showMenuAsync (juce::PopupMenu::Options().withMousePosition(),
@@ -1103,7 +1103,7 @@ void MainComponent::showScanMenu()
 void MainComponent::addScanFolder()
 {
     scanFolderChooser = std::make_unique<juce::FileChooser> (
-        "Choose a folder to scan for VST3 plugins", juce::File(), juce::String());
+        "Choose a folder to scan for plugins", juce::File(), juce::String());
 
     scanFolderChooser->launchAsync (
         juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,

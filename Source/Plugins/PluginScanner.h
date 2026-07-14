@@ -7,9 +7,10 @@ namespace play
 
 //==============================================================================
 /**
-    Maintains the list of installed VST3 plugins.
+    Maintains the list of installed plugins — VST3 on every platform, plus
+    Audio Unit on macOS (whichever formats the build hosts).
 
-    Scanning runs on a background thread over the standard VST3 directories.
+    Scanning runs on a background thread over each format's standard directories.
     A dead-man's-pedal file blacklists any plugin that crashed a previous scan.
     The list is persisted in the app's properties file.
 

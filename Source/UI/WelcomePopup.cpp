@@ -87,7 +87,7 @@ void WelcomePopup::loadStepContent()
     {
         StepContent s;
         s.title = "Welcome!";
-        s.lines.add ({ "Plugin Play runs your music through VST3 effects, live." });
+        s.lines.add ({ "Plugin Play runs your music through " + pluginFormatsLabel + " effects, live." });
         s.lines.add ({ "Any app plays in - your DJ software, Spotify, anything." });
         s.lines.add ({ "The processed sound comes out your speakers." });
         s.lines.add ({ "Your tracks on disk are never changed." });
