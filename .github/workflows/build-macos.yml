@@ -23,14 +23,16 @@ jobs:
       # key (with the commit sha) never hits, so every run saves a fresh cache
       # and the restore-keys pull the most recent one. actions/cache preserves
       # file mtimes, so make only rebuilds what the new checkout actually changed.
+      # The vN token namespaces the cache: bump it to abandon caches that carry a
+      # stale CMakeCache.txt (e.g. an old minimum-OS deployment target).
       - name: Restore build cache
         uses: actions/cache@v4
         with:
           path: build
-          key: macos-build-${{ hashFiles('CMakeLists.txt') }}-${{ github.sha }}
+          key: macos-build-v2-${{ hashFiles('CMakeLists.txt') }}-${{ github.sha }}
           restore-keys: |
-            macos-build-${{ hashFiles('CMakeLists.txt') }}-
-            macos-build-
+            macos-build-v2-${{ hashFiles('CMakeLists.txt') }}-
+            macos-build-v2-
 
       - name: Configure
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release
@@ -45,6 +47,19 @@ jobs:
           lipo -info "$BIN"
           lipo -archs "$BIN" | grep -q x86_64
           lipo -archs "$BIN" | grep -q arm64
+
+      # The app must run on macOS 11.0+, so the binary's baked-in minimum-OS floor
+      # (there is no LSMinimumSystemVersion plist key — Gatekeeper reads the Mach-O
+      # LC_BUILD_VERSION) must be 11.0 for every slice. This caught a stale build
+      # cache shipping a 14.4-only binary.
+      - name: Verify minimum macOS version is 11.0
+        run: |
+          BIN="build/PluginPlay_artefacts/Release/Plugin Play.app/Contents/MacOS/Plugin Play"
+          for arch in x86_64 arm64; do
+            minos=$(vtool -arch "$arch" -show-build "$BIN" | awk '/minos/{print $2}')
+            echo "$arch: minos=$minos"
+            [ "$minos" = "11.0" ] || { echo "ERROR: expected minos 11.0 for $arch, got $minos"; exit 1; }
+          done
 
       - name: Package app
         run: ditto -c -k --keepParent "build/PluginPlay_artefacts/Release/Plugin Play.app" PluginPlay-macOS.zip

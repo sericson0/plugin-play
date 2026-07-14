@@ -8,8 +8,11 @@ cmake_minimum_required(VERSION 3.22)
 # preferred driverless per-app capture, but they are weak-linked and runtime-gated
 # (see ProcessTap.mm) so 11.0–14.3 falls back to the BlackHole virtual-device path.
 # Must be set before project().
-set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "")
-set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "")
+# FORCE so these win even over a stale value restored in a cached build dir — a
+# plain `CACHE STRING ""` set is ignored when the cache already holds a value, which
+# once shipped a binary still stamped with the old (14.4) minimum-OS floor.
+set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "" FORCE)
+set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "" FORCE)
 
 project(PluginPlay VERSION 1.0.0 LANGUAGES CXX C)
 
