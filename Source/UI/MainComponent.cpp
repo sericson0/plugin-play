@@ -256,7 +256,9 @@ private:
                  "     always at the top of this window) - it checks for BlackHole.\n"
                  "2.  If none is found, it gives you a one-line Homebrew command to copy,\n"
                  "     or a link to the BlackHole download page.\n"
-                 "3.  After installing, open AUDIO ROUTING again and Re-check.");
+                 "3.  After installing, RESTART YOUR MAC so BlackHole loads - the new device\n"
+                 "     usually won't appear until you do (or run 'sudo killall coreaudiod').\n"
+                 "4.  Open AUDIO ROUTING again and Re-check.");
 
         addHeading ("ROUTING AN APP");
         addBody ("Set the app's (or macOS's) output to 'BlackHole 2ch'. Then in Plugin Play, "

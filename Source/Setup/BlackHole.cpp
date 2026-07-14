@@ -101,7 +101,7 @@ BlackHoleSetupComponent::BlackHoleSetupComponent (juce::AudioDeviceManager& dm)
     detected = BlackHole::findInstalled (deviceManager, false);
     refreshContent();
 
-    setSize (520, 470);
+    setSize (520, 540);
 }
 
 //==============================================================================
@@ -184,13 +184,18 @@ void BlackHoleSetupComponent::refreshContent()
             "  1.  Click \"Copy Homebrew command\" below.\n"
             "  2.  Open Terminal, paste, and press Return:\n"
             "        " + BlackHole::homebrewCommand + "\n"
-            "  3.  Enter your password if asked, then come back and click \"Re-check\".\n"
+            "  3.  Enter your password if asked.\n"
             "\n"
             "Prefer a regular installer?\n"
-            "  Use \"Open the BlackHole download page\" below, download the installer,\n"
-            "  run it, then come back and click \"Re-check\".\n"
+            "  Use \"Open the BlackHole download page\" below, download the installer\n"
+            "  and run it.\n"
             "\n"
-            "Once BlackHole is installed, this window will show you how to route an app\n"
+            "IMPORTANT: after installing, RESTART YOUR MAC so BlackHole loads - the new\n"
+            "audio device usually won't appear until you do. Then click \"Re-check\".\n"
+            "(If you'd rather not restart, running 'sudo killall coreaudiod' in Terminal\n"
+            "reloads the audio system instead.)\n"
+            "\n"
+            "Once BlackHole shows up, this window will show you how to route an app\n"
             "through Plugin Play.",
             juce::dontSendNotification);
     }

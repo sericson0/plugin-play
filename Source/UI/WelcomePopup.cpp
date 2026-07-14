@@ -213,7 +213,8 @@ void WelcomePopup::refreshCableStep()
     else
     {
         lines.add ({ "No virtual audio device was found - you'll need BlackHole.", true });
-        lines.add ({ "Click INSTALL BLACKHOLE below for the quick setup." });
+        lines.add ({ "Click INSTALL BLACKHOLE below, then restart your Mac so it" });
+        lines.add ({ "appears - the setup window has the full steps.", false, true });
     }
    #else
     detectedCable_ = VirtualCable::findInstalled (deviceManager_, false);
