@@ -263,6 +263,13 @@ private:
 
     int timerTicks = 0;
 
+    // Pending countdown (30 Hz ticks) to a buildDeviceSelectors() run. Engine change
+    // broadcasts arrive in bursts (one per plugin during a session restore, plus
+    // device changes), and each rebuild does COM enumerations — so rebuilds are
+    // coalesced: every broadcast just re-arms this, and the rebuild runs once, a few
+    // ticks after the last one. 0 = nothing pending.
+    int selectorRefreshTicks = 0;
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };
 

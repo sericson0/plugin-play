@@ -962,7 +962,11 @@ void MainComponent::changeListenerCallback (juce::ChangeBroadcaster* source)
     {
         chainView.refresh();
         chainView.setSize (viewport.getMaximumVisibleWidth(), chainView.getIdealHeight());
-        buildDeviceSelectors();   // device may have changed (Audio Settings, hot-plug)
+
+        // Rebuild the device/app selectors, but debounced via the UI timer: the
+        // rebuild does COM enumerations, and restore/preset loads broadcast once per
+        // plugin — rebuilding on every one of those made startup noticeably longer.
+        selectorRefreshTicks = 5;   // ~165 ms at 30 Hz
     }
 
     updateScanButton();
@@ -986,6 +990,10 @@ void MainComponent::timerCallback()
         redirectNotice.clear();
         updateSourceIndicator();
     }
+
+    // Debounced device-selector rebuild (armed by engine change broadcasts).
+    if (selectorRefreshTicks > 0 && --selectorRefreshTicks == 0)
+        buildDeviceSelectors();
 
     if (++timerTicks % 30 == 0)
     {
@@ -1828,7 +1836,19 @@ void MainComponent::updateStatusText()
     juce::String text;
     juce::String cpuText;
 
-    if (scanner.isScanning())
+    if (! engine.isSessionLoaded())
+    {
+        // Startup: the session load is deferred past the first paint, so say what's
+        // coming rather than flashing "No audio device" at the user.
+        text = "Starting audio engine...";
+    }
+    else if (engine.isRestoringChain())
+    {
+        const auto name = engine.restoringPluginName();
+        text = "Loading your effect chain"
+                 + (name.isEmpty() ? juce::String() : ":  " + name) + "...";
+    }
+    else if (scanner.isScanning())
     {
         auto current = scanner.getProgressText();
         text = "Scanning: " + (current.isEmpty() ? "..." : current);
