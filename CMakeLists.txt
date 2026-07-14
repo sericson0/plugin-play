@@ -53,6 +53,7 @@ target_sources(PluginPlay
         Source/Audio/AudioEngine.cpp
         Source/Audio/AppRouting.cpp
         Source/Audio/LoopbackCapture.cpp
+        Source/Audio/MonitorOutput.cpp
         Source/Audio/WasapiEndpoints.cpp
         Source/Plugins/PluginScanner.cpp
         Source/Setup/UpdateCheck.cpp

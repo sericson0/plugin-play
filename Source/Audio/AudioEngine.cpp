@@ -74,6 +74,9 @@ void AudioEngine::MeterTap::audioDeviceIOCallbackWithContext (const float* const
                                             outputChannelData, numOutputChannels,
                                             numSamples, context);
 
+    // Mirror the finished output to the monitor path (no-op while it's off).
+    owner.monitorOut.push (outputChannelData, numOutputChannels, numSamples);
+
     for (int ch = 0; ch < juce::jmin (2, numOutputChannels); ++ch)
         if (outputChannelData[ch] != nullptr)
             holdPeak (owner.outputPeaks[ch], outputChannelData[ch]);
@@ -125,7 +128,8 @@ AudioEngine::~AudioEngine()
     }
 
     deviceManager.removeChangeListener (this);
-    deviceManager.removeAudioCallback (&meterTap);
+    deviceManager.removeAudioCallback (&meterTap);   // blocks until no push is in flight
+    monitorOut.close();
     player.setProcessor (nullptr);
     capture.stop();          // join the capture thread and restore the endpoint mute
     graph.clear();
@@ -292,6 +296,68 @@ void AudioEngine::setMasterBypass (bool shouldBypass)
             wrapper->setMasterBypass (masterBypassed);
 
     sendChangeMessage();
+}
+
+juce::String AudioEngine::setMonitorOutput (const juce::String& deviceName)
+{
+    // Re-picking the current, working choice is a no-op (avoids a pointless
+    // close/reopen blip when the UI refreshes).
+    if (deviceName == monitorOutputIntent && (deviceName.isEmpty() || monitorOut.isRunning()))
+        return {};
+
+    // The monitor is a *second* destination — it must be a different device from the
+    // main output, or the same endpoint just plays everything twice (and out of step).
+    // The UI already leaves the main output out of the list; this is the safety net.
+    if (deviceName.isNotEmpty() && deviceName == mainOutputName())
+        return "The monitor output must be a different device from the main output.";
+
+    if (deviceName.isEmpty())
+    {
+        monitorOut.close();
+        monitorOutputIntent.clear();
+    }
+    else
+    {
+        // A different device gets its default (first) pair, like the main output.
+        auto error = monitorOut.open (deviceManager, deviceName);
+        if (error.isNotEmpty())
+            return error;
+
+        monitorOutputIntent = deviceName;
+        monitorMatchedRate  = currentSampleRate();
+    }
+
+    monitorPairIntent = 0;
+    scheduleSave();
+    sendChangeMessage();
+    return {};
+}
+
+juce::String AudioEngine::setMonitorOutputPair (int startChannel)
+{
+    if (monitorOutputIntent.isEmpty()
+         || (startChannel == monitorPairIntent && monitorOut.isRunning()))
+        return {};
+
+    auto error = monitorOut.open (deviceManager, monitorOutputIntent, startChannel);
+    if (error.isNotEmpty())
+        return error;
+
+    monitorPairIntent  = startChannel;
+    monitorMatchedRate = currentSampleRate();
+    scheduleSave();
+    sendChangeMessage();
+    return {};
+}
+
+void AudioEngine::dropMonitorIfItIsMainOutput()
+{
+    if (monitorOutputIntent.isNotEmpty() && monitorOutputIntent == mainOutputName())
+    {
+        monitorOut.close();
+        monitorOutputIntent.clear();
+        monitorPairIntent = 0;
+    }
 }
 
 void AudioEngine::registerSafeDeviceTypes()
@@ -575,6 +641,20 @@ void AudioEngine::changeListenerCallback (juce::ChangeBroadcaster*)
         }
     }
 
+    // If the user just switched the main output onto the monitor's device, the
+    // monitor is now redundant — drop it rather than double every sample.
+    dropMonitorIfItIsMainOutput();
+
+    // Keep the monitor output matched to the main device's rate. If Auto-match (or a
+    // manual change) reopened the main device at a new rate, reopen the monitor so it
+    // runs at the closest rate to the new source rather than resampling for the rest
+    // of the session. A buffer-size-only change leaves the rate equal, so this no-ops.
+    if (monitorOut.isRunning() && std::abs (currentSampleRate() - monitorMatchedRate) > 1.0)
+    {
+        monitorOut.open (deviceManager, monitorOutputIntent, monitorPairIntent);
+        monitorMatchedRate = currentSampleRate();
+    }
+
     scheduleSave();
     sendChangeMessage();
 }
@@ -729,6 +809,15 @@ void AudioEngine::saveSession()
     if (auto deviceState = deviceManager.createStateXml())
         devices->addChildElement (deviceState.release());
 
+    // The monitor output persists as the chosen intent even while unopenable
+    // (device unplugged), so it comes back when the hardware does.
+    if (monitorOutputIntent.isNotEmpty())
+    {
+        devices->setAttribute ("monitorOutput", monitorOutputIntent);
+        if (monitorPairIntent > 0)
+            devices->setAttribute ("monitorOutputPair", monitorPairIntent);
+    }
+
     // Input routing. An app-to-cable redirect is saved by executable name (a saved
     // PID would be meaningless next launch); a plain device input saves as "device".
     // The quarantined loopback path only writes "capture" when explicitly enabled.
@@ -831,7 +920,11 @@ void AudioEngine::loadSession()
             master->setLimiterEnabled (limiterEnabled);
 
         if (auto* devices = session->getChildByName ("DEVICES"))
+        {
             deviceState = devices->getFirstChildElement();
+            monitorOutputIntent = devices->getStringAttribute ("monitorOutput");
+            monitorPairIntent   = devices->getIntAttribute ("monitorOutputPair", 0);
+        }
     }
 
     // No saved device state (first launch): a plain initialise() would open the
@@ -861,6 +954,19 @@ void AudioEngine::loadSession()
 
     deviceManager.initialise (2, 2, deviceState, true);
     rebuildConnections();
+
+    // Never restore the monitor onto the main output device (e.g. the saved main
+    // device is missing this launch and Windows fell back to the monitor's device).
+    dropMonitorIfItIsMainOutput();
+
+    // Reopen the monitor output once the main device is up (so it can match the
+    // source rate). Failure is silent by design — the device may simply not be
+    // plugged in today; the intent is kept and retried next launch.
+    if (monitorOutputIntent.isNotEmpty())
+    {
+        monitorOut.open (deviceManager, monitorOutputIntent, monitorPairIntent);
+        monitorMatchedRate = currentSampleRate();
+    }
 
     // Restore the input routing now the output device is open. Re-applies an app→cable
     // redirect (migrating legacy loopback "capture" sessions too); does nothing if the
