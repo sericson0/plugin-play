@@ -231,8 +231,12 @@ void AudioEngine::dropGhostSlots()
 void AudioEngine::clearChain()
 {
     // Supersede any restore still instantiating plugins in the background so its
-    // late callbacks don't push_back into the now-cleared chain.
+    // late callbacks don't push_back into the now-cleared chain. That restore will
+    // never reach its completion step, so reset its in-progress state here too —
+    // otherwise restoringSession would stay true forever, gating every future save.
     ++restoreGeneration;
+    restoringSession = false;
+    currentlyRestoring.clear();
     ghostSlots.clear();
 
     while (! slots.empty())
@@ -294,16 +298,103 @@ void AudioEngine::setMasterBypass (bool shouldBypass)
     sendChangeMessage();
 }
 
+#if JUCE_WINDOWS
+// The safe (non-ASIO) Windows device types, in the order the DRIVER menu lists them.
+static const char* const safeDeviceTypeNames[] = { "Windows Audio",
+                                                   "Windows Audio (Exclusive Mode)",
+                                                   "Windows Audio (Low Latency Mode)",
+                                                   "DirectSound" };
+
+static std::unique_ptr<juce::AudioIODeviceType> createSafeDeviceType (const juce::String& name)
+{
+    using Type = juce::AudioIODeviceType;
+
+    if (name == "Windows Audio (Exclusive Mode)")
+        return std::unique_ptr<Type> (Type::createAudioIODeviceType_WASAPI (juce::WASAPIDeviceMode::exclusive));
+    if (name == "Windows Audio (Low Latency Mode)")
+        return std::unique_ptr<Type> (Type::createAudioIODeviceType_WASAPI (juce::WASAPIDeviceMode::sharedLowLatency));
+    if (name == "DirectSound")
+        return std::unique_ptr<Type> (Type::createAudioIODeviceType_DirectSound());
+
+    return std::unique_ptr<Type> (Type::createAudioIODeviceType_WASAPI (juce::WASAPIDeviceMode::shared));
+}
+#endif
+
+juce::String AudioEngine::savedDeviceTypeName() const
+{
+    auto file = getSessionFile();
+    auto session = juce::XmlDocument::parse (file);
+
+    if (session == nullptr)
+        session = juce::XmlDocument::parse (file.getSiblingFile ("session.bak"));
+
+    if (session != nullptr)
+        if (auto* devices = session->getChildByName ("DEVICES"))
+            if (auto* setup = devices->getFirstChildElement())
+                return setup->getStringAttribute ("deviceType");
+
+    return {};
+}
+
 void AudioEngine::registerSafeDeviceTypes()
 {
    #if JUCE_WINDOWS
-    // Mirror JUCE's default Windows set MINUS ASIO. Adding any type up front stops
-    // createDeviceTypesIfNeeded() from adding + scanning the full default list.
-    using Type = juce::AudioIODeviceType;
-    deviceManager.addAudioDeviceType (std::unique_ptr<Type> (Type::createAudioIODeviceType_WASAPI (juce::WASAPIDeviceMode::shared)));
-    deviceManager.addAudioDeviceType (std::unique_ptr<Type> (Type::createAudioIODeviceType_WASAPI (juce::WASAPIDeviceMode::exclusive)));
-    deviceManager.addAudioDeviceType (std::unique_ptr<Type> (Type::createAudioIODeviceType_WASAPI (juce::WASAPIDeviceMode::sharedLowLatency)));
-    deviceManager.addAudioDeviceType (std::unique_ptr<Type> (Type::createAudioIODeviceType_DirectSound()));
+    // Register only the one type the saved session opens with (default: shared
+    // WASAPI). initialise() scans every registered type synchronously on the message
+    // thread, so registering the full safe set here meant four device enumerations
+    // before the window could respond — the bulk of the startup freeze. The rest of
+    // the set is filled in shortly after startup by registerRemainingDeviceTypesWhen-
+    // Idle(); ASIO stays strictly on-demand (ensureAsioEnabled). Registering anything
+    // also stops createDeviceTypesIfNeeded() adding + scanning JUCE's default list.
+    auto saved = savedDeviceTypeName();
+
+    if (saved == "ASIO")   // never scanned at startup; the WASAPI fallback opens instead
+        saved.clear();
+
+    deviceManager.addAudioDeviceType (createSafeDeviceType (saved));
+   #endif
+}
+
+void AudioEngine::registerRemainingDeviceTypesWhenIdle()
+{
+   #if JUCE_WINDOWS
+    // One type per timer turn: WM_TIMER is only delivered after paint and input have
+    // been serviced, so the window stays live between the scans (each of which blocks
+    // the message thread for a moment). Waits out an in-flight chain restore so the
+    // user's plugins come back before we spend time on driver lists.
+    juce::Timer::callAfterDelay (250, [weak = juce::WeakReference<AudioEngine> (this)]
+    {
+        if (weak == nullptr)
+            return;
+
+        auto& self = *weak;
+
+        if (self.restoringSession)
+        {
+            self.registerRemainingDeviceTypesWhenIdle();
+            return;
+        }
+
+        for (auto* name : safeDeviceTypeNames)
+        {
+            bool present = false;
+            for (auto* type : self.deviceManager.getAvailableDeviceTypes())
+                if (type->getTypeName() == name)
+                    { present = true; break; }
+
+            if (present)
+                continue;
+
+            auto type = createSafeDeviceType (name);
+            auto* raw = type.get();
+            self.deviceManager.addAudioDeviceType (std::move (type));
+            raw->scanForDevices();       // scanned before anyone can call getDeviceNames
+            self.sendChangeMessage();    // the DRIVER dropdown picks up the new entry
+
+            self.registerRemainingDeviceTypesWhenIdle();   // next type, next turn
+            return;
+        }
+    });
    #endif
 }
 
@@ -861,28 +952,47 @@ void AudioEngine::loadSession()
 
     deviceManager.initialise (2, 2, deviceState, true);
     rebuildConnections();
+    sendChangeMessage();   // the device is open — selectors and status can populate now
 
-    // Restore the input routing now the output device is open. Re-applies an app→cable
-    // redirect (migrating legacy loopback "capture" sessions too); does nothing if the
-    // saved app isn't running this launch — the user re-picks from the dropdown.
-    if (session != nullptr)
-        restoreRedirectFromSession (*session);
-
+    // The rest of the restore continues in later message-loop turns so the window
+    // paints and answers input between the heavy steps. Timer callbacks, not
+    // callAsync: posted messages are dispatched BEFORE WM_PAINT, so chaining with
+    // callAsync would keep the window frozen; WM_TIMER only fires once paint and
+    // input have been serviced.
     if (session != nullptr)
     {
-        if (auto* chain = session->getChildByName ("CHAIN"))
-        {
-            if (chain->getNumChildElements() > 0)
+        std::shared_ptr<juce::XmlElement> sharedSession (session.release());
+        const int generation = restoreGeneration;
+
+        juce::Timer::callAfterDelay (1,
+            [weak = juce::WeakReference<AudioEngine> (this), sharedSession, generation]
             {
-                restoringSession = true;
-                auto chainCopy = std::make_shared<juce::XmlElement> (*chain);
-                restoreChainFromXml (chainCopy, 0, std::make_shared<juce::StringArray>(), restoreGeneration);
-                return;
-            }
-        }
+                if (weak == nullptr || generation != weak->restoreGeneration)
+                    return;
+
+                auto& self = *weak;
+
+                // Restore the input routing now the output device is open. Re-applies an
+                // app→cable redirect (migrating legacy loopback "capture" sessions too);
+                // does nothing if the saved app isn't running this launch — the user
+                // re-picks from the dropdown.
+                self.restoreRedirectFromSession (*sharedSession);
+
+                if (auto* chain = sharedSession->getChildByName ("CHAIN"))
+                {
+                    if (chain->getNumChildElements() > 0)
+                    {
+                        self.restoringSession = true;
+                        auto chainCopy = std::make_shared<juce::XmlElement> (*chain);
+                        self.restoreChainFromXml (chainCopy, 0,
+                                                  std::make_shared<juce::StringArray>(), generation);
+                    }
+                }
+            });
     }
 
-    sendChangeMessage();
+    // Fill in the drivers we didn't scan at startup (one per turn, after the restore).
+    registerRemainingDeviceTypesWhenIdle();
 }
 
 void AudioEngine::restoreChainFromXml (std::shared_ptr<juce::XmlElement> chainXml, int slotIndex,
@@ -896,6 +1006,7 @@ void AudioEngine::restoreChainFromXml (std::shared_ptr<juce::XmlElement> chainXm
     if (slotIndex >= chainXml->getNumChildElements())
     {
         restoringSession = false;
+        currentlyRestoring.clear();
         rebuildConnections();
 
         // Only persist the restored chain if every plugin came back. If any
@@ -937,6 +1048,10 @@ void AudioEngine::restoreChainFromXml (std::shared_ptr<juce::XmlElement> chainXm
 
     const auto bypassed = slotXml->getBoolAttribute ("bypassed");
     const auto stateBase64 = slotXml->getStringAttribute ("state");
+
+    // Name the plugin being loaded so the status line can show real progress while
+    // the chain comes back (each instantiation blocks the message thread briefly).
+    currentlyRestoring = description.name;
 
     formatManager.createPluginInstanceAsync (description, currentSampleRate(), currentBlockSize(),
         [safeThis = juce::WeakReference<AudioEngine> (this), chainXml, slotIndex, description, bypassed, stateBase64, failures, generation]
@@ -982,7 +1097,16 @@ void AudioEngine::restoreChainFromXml (std::shared_ptr<juce::XmlElement> chainXm
                     self.ghostSlots.push_back ({ slotIndex, std::make_unique<juce::XmlElement> (*sx) });
             }
 
-            self.restoreChainFromXml (chainXml, slotIndex + 1, failures, generation);
+            // Next slot in a fresh timer turn, not straight away: instantiation runs
+            // in a posted message, and posted messages pre-empt WM_PAINT and input,
+            // so chaining slots directly keeps the window frozen ("Not Responding")
+            // for the whole restore. A timer callback lets paint and clicks through
+            // between plugin loads.
+            juce::Timer::callAfterDelay (1, [safeThis, chainXml, slotIndex, failures, generation]
+            {
+                if (safeThis != nullptr)
+                    safeThis->restoreChainFromXml (chainXml, slotIndex + 1, failures, generation);
+            });
         });
 }
 

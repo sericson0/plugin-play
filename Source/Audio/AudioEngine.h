@@ -135,9 +135,21 @@ public:
     float readOutputPeak (int channel) { return outputPeaks[channel & 1].exchange (0.0f); }
 
     //==============================================================================
-    /** Restores devices + chain from disk (or opens default devices on first run). */
+    /** Restores devices + chain from disk (or opens default devices on first run).
+        Runs in stages spread over several message-loop turns (device open, then the
+        app redirect, then one plugin per turn) so the window keeps painting and
+        responding between the heavy steps instead of blocking in one long call. */
     void loadSession();
     void saveSession();
+
+    /** False until the deferred startup loadSession() has begun; the UI shows a
+        "starting" status instead of "no audio device" while this is false. */
+    bool isSessionLoaded() const noexcept           { return sessionLoaded; }
+
+    /** True while a session/preset restore is still instantiating plugins;
+        restoringPluginName() names the one currently loading (for the status line). */
+    bool isRestoringChain() const noexcept          { return restoringSession; }
+    juce::String restoringPluginName() const        { return currentlyRestoring; }
 
 private:
     //==============================================================================
@@ -183,11 +195,22 @@ private:
     double currentSampleRate() const;
     int currentBlockSize() const;
 
-    /** Registers the device types that are safe to scan on the message thread at
-        startup (WASAPI + DirectSound). Called before the device manager is initialised
-        so JUCE doesn't add + scan its full default set (which includes the hang-prone
-        ASIO). No-op off Windows (JUCE's defaults are used there). */
+    /** Registers ONLY the device type the saved session opens with. Called before the
+        device manager is initialised, for two reasons: it stops JUCE adding + scanning
+        its full default set (which includes the hang-prone ASIO), and initialise()
+        synchronously scans every registered type on the message thread, so each extra
+        type registered here directly lengthens the startup freeze. No-op off Windows
+        (JUCE's defaults are used there). */
     void registerSafeDeviceTypes();
+
+    /** Adds + scans the remaining safe (non-ASIO) device types, one per timer turn,
+        once startup is done. Each scan blocks the message thread for a moment, so
+        they're spread across turns and wait for the chain restore to finish first. */
+    void registerRemainingDeviceTypesWhenIdle();
+
+    /** Device type name (e.g. "Windows Audio") the saved session opens with, or "". */
+    juce::String savedDeviceTypeName() const;
+
     bool asioEnabled = false;
 
     juce::AudioProcessorGraph graph;
@@ -228,6 +251,9 @@ private:
     std::atomic<float> outputPeaks[2] { 0.0f, 0.0f };
 
     bool restoringSession = false;
+    // Name of the plugin a session/preset restore is currently instantiating (shown
+    // in the status line); empty when no restore is in flight.
+    juce::String currentlyRestoring;
     // False until loadSession() runs (startup defers it past the first paint); gates
     // every save so an early exit can't replace the saved session with an empty one.
     bool sessionLoaded = false;
