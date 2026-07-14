@@ -41,7 +41,12 @@ public:
             logo = logo.getClippedImage ({ 0, y, logo.getWidth(), h });
         }
 
-        const char* names[numTabs] = { "Overview", "Virtual Cable", "Audio Settings",
+       #if JUCE_MAC
+        const char* const routingTabName = "Audio Routing";   // BlackHole / built-in capture
+       #else
+        const char* const routingTabName = "Virtual Cable";
+       #endif
+        const char* names[numTabs] = { "Overview", routingTabName, "Audio Settings",
                                        "Plugins", "Troubleshooting" };
         for (int i = 0; i < numTabs; ++i)
         {
@@ -180,6 +185,21 @@ private:
                  "It can connect to any audio source or DJ software.");
 
         addHeading ("GETTING STARTED");
+       #if JUCE_MAC
+        if (play::ProcessTapCapture::isSupported())
+            addBody ("1.  INPUT - Plugin Play can capture any app directly, with no extra\n"
+                     "     software. Just pick it in the INPUT dropdown under \"Capture an app\".\n"
+                     "2.  OUTPUT - pick your speakers or audio interface. See Audio Settings.\n"
+                     "3.  Add and rearrange plugins to build your effect chain. See the\n"
+                     "     Plugins tab.");
+        else
+            addBody ("1.  AUDIO ROUTING - Plugin Play uses BlackHole to bring another app's\n"
+                     "     sound in. See the Audio Routing tab to install it.\n"
+                     "2.  INPUT & OUTPUT - set your app's output to BlackHole, pick BlackHole\n"
+                     "     as the input here, and your speakers as the output. See Audio Settings.\n"
+                     "3.  Add and rearrange plugins to build your effect chain. See the\n"
+                     "     Plugins tab.");
+       #else
         addBody ("1.  VIRTUAL CABLE - Plugin Play uses a virtual cable to connect to\n"
                  "     your audio player. See the Virtual Cable tab to install.\n"
                  "2.  INPUT & OUTPUT - pick your audio player as the input, and your\n"
@@ -187,6 +207,7 @@ private:
                  "     CABLE Output as your DJ software's output and Plugin Play's input.\n"
                  "3.  Add and rearrange plugins to build your effect chain. See the\n"
                  "     Plugins tab.");
+       #endif
 
         addHeading ("TIPS");
         addBody ("- Hover over any control for a tooltip that explains it.\n"
@@ -203,6 +224,49 @@ private:
 
     void populateVirtualCable()
     {
+       #if JUCE_MAC
+        if (play::ProcessTapCapture::isSupported())
+        {
+            addHeading ("NO SETUP NEEDED ON YOUR MAC");
+            addBody ("Your macOS version (14.4 or newer) lets Plugin Play capture any app's "
+                     "audio directly - no cable, no extra software.");
+
+            addHeading ("HOW IT WORKS");
+            addBody ("1.  Open the INPUT dropdown and, under 'Capture an app', pick the app\n"
+                     "     you want (your DJ software, Spotify, a browser...).\n"
+                     "2.  Plugin Play captures that app and mutes its own output, so you only\n"
+                     "     hear the processed sound.\n"
+                     "3.  Set OUTPUT to your speakers or interface - it can even be the same\n"
+                     "     speakers the app was using.");
+
+            addHeading ("PERMISSION");
+            addBody ("The first time you capture an app, macOS asks for System Audio Recording "
+                     "permission - allow it. You can change this later in System Settings > "
+                     "Privacy & Security.");
+            return;
+        }
+
+        addHeading ("WHAT IT'S FOR");
+        addBody ("On this macOS version, Plugin Play uses BlackHole - a free virtual audio "
+                 "device - to carry another app's sound in: the app plays into BlackHole, and "
+                 "Plugin Play reads BlackHole as its input.");
+
+        addHeading ("SETTING IT UP");
+        addBody ("1.  Click AUDIO ROUTING (in the header until a device is installed, and\n"
+                 "     always at the top of this window) - it checks for BlackHole.\n"
+                 "2.  If none is found, it gives you a one-line Homebrew command to copy,\n"
+                 "     or a link to the BlackHole download page.\n"
+                 "3.  After installing, open AUDIO ROUTING again and Re-check.");
+
+        addHeading ("ROUTING AN APP");
+        addBody ("Set the app's (or macOS's) output to 'BlackHole 2ch'. Then in Plugin Play, "
+                 "set INPUT to 'BlackHole 2ch' and OUTPUT to your speakers or interface. "
+                 "On macOS 14.4 or newer none of this is needed - Plugin Play captures apps directly.");
+
+        addHeading ("NOTE");
+        addBody ("Don't set the app's output volume too low - doing so can raise the noise floor.\n"
+                 "Instead, adjust the volume with your Mac's output volume, DAC or mixer.");
+       #else
         addHeading ("WHAT IT'S FOR");
         addBody ("A virtual cable is a software 'wire' that carries sound between apps:\n"
                  "your DJ software plays into the cable, and Plugin Play reads the cable as its input.");
@@ -222,10 +286,38 @@ private:
         addHeading ("NOTE");
         addBody ("Don't set your DJ software's output volume too low - doing so can raise the noise floor.\n"
                  "Instead, adjust the volume with your computer's output volume, DAC or mixer.");
+       #endif
     }
 
     void populateAudioSettings()
     {
+       #if JUCE_MAC
+        if (play::ProcessTapCapture::isSupported())
+        {
+            addHeading ("INPUT & OUTPUT");
+            addBody ("The device bar below the meters has INPUT and OUTPUT selectors.\n"
+                     "Set OUTPUT to your speakers or audio interface. For INPUT, either pick a "
+                     "hardware input, or pick a running app under 'Capture an app'.");
+
+            addHeading ("CAPTURING AN APP (NO CABLE)");
+            addBody ("Under 'Capture an app' in the INPUT dropdown, pick one (e.g. Spotify). "
+                     "Plugin Play taps its audio directly and mutes the app's own output, so you "
+                     "only hear the processed sound - even out of the same speakers.\n"
+                     "It stops and un-mutes the app when you switch away or it quits.");
+        }
+        else
+        {
+            addHeading ("INPUT & OUTPUT");
+            addBody ("The device bar below the meters has INPUT and OUTPUT selectors.\n"
+                     "Set OUTPUT to your speakers or audio interface. Set INPUT to BlackHole, "
+                     "and set BlackHole as the output in the app you want to process.");
+
+            addHeading ("SENDING AN APP THROUGH PLUGIN PLAY");
+            addBody ("Route the app's output to BlackHole, then pick BlackHole as the INPUT here. "
+                     "On macOS 14.4 or newer you can skip this and pick the app directly under "
+                     "'Capture an app'.");
+        }
+       #else
         addHeading ("INPUT & OUTPUT");
         addBody ("The device bar below the meters has INPUT and OUTPUT selectors.\n"
                  "Set OUTPUT to your speakers or audio interface. Set INPUT to the "
@@ -235,11 +327,17 @@ private:
         addBody ("The INPUT dropdown also lists running apps. Pick one (e.g. Spotify) "
                  "and Plugin Play routes it through the cable for you.\n"
                  "It returns the app's output to normal when you switch away or quit.");
+       #endif
 
         addHeading ("ADVANCED CONTROLS");
+       #if JUCE_MAC
+        addBody ("Expand the panel for INPUT / OUTPUT PAIR (which channels of a "
+                 "multi-channel device), RATE and BUFFER.");
+       #else
         addBody ("Expand the panel for INPUT / OUTPUT PAIR (which channels of a "
                  "multi-channel device), DRIVER (e.g. Windows Audio or ASIO), RATE "
                  "and BUFFER.");
+       #endif
 
         addHeading ("SAMPLE RATE & BUFFER SIZE");
         addBody ("'Auto - match source' follows your input's rate so audio isn't "
@@ -281,11 +379,24 @@ private:
     void populateTroubleshooting()
     {
         addHeading ("NO SOUND / METERS NOT MOVING");
+       #if JUCE_MAC
+        if (play::ProcessTapCapture::isSupported())
+            addBody ("- Check OUTPUT is set to the right device and press TEST OUTPUT.\n"
+                     "- Make sure the app you picked under 'Capture an app' is playing.\n"
+                     "- If you denied the System Audio Recording prompt, allow it in\n"
+                     "   System Settings > Privacy & Security, then pick the app again.");
+        else
+            addBody ("- Check OUTPUT is set to the right device and press TEST OUTPUT.\n"
+                     "- Make sure the app is playing and its output is set to BlackHole.\n"
+                     "- Confirm INPUT is BlackHole, and the app's output volume isn't\n"
+                     "   turned down too low.");
+       #else
         addBody ("- Check OUTPUT is set to the right device and press TEST OUTPUT.\n"
                  "- Make sure your DJ software is playing, and its output is set\n"
                  "   to the virtual cable.\n"
                  "- Confirm INPUT is the matching cable output, and the DJ\n"
                  "   software's output volume isn't turned down too low.");
+       #endif
 
         addHeading ("EFFECTS AREN'T CHANGING THE SOUND");
         addBody ("Check the master button reads FX ON, check the effect's own "
@@ -626,9 +737,19 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
         // repopulates every selector for the new driver's devices.
     };
 
+   #if JUCE_MAC
+    if (play::ProcessTapCapture::isSupported())
+        inputSelector   .setTooltip ("Where Plugin Play gets its audio: an input device, or a running "
+                                     "app - pick an app under 'Capture an app' and Plugin Play taps it "
+                                     "directly, no cable needed");
+    else
+        inputSelector   .setTooltip ("Where Plugin Play gets its audio: an input device such as BlackHole "
+                                     "(route your app's output to BlackHole, then pick it here)");
+   #else
     inputSelector       .setTooltip ("Where Plugin Play gets its audio: an input device (e.g. the virtual "
                                      "cable), or a running app - pick an app and Plugin Play routes it "
                                      "through the cable for you (needs a virtual cable installed)");
+   #endif
     outputSelector      .setTooltip ("Audio output device - where processed audio is sent");
     inputChannelSelector .setTooltip ("Which channel pair of the input device to capture");
     outputChannelSelector.setTooltip ("Which channel pair of the output device to play to");

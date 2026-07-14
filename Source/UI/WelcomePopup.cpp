@@ -3,6 +3,11 @@
 #include "../Setup/VirtualCable.h"
 #include "../Theme.h"
 
+#if JUCE_MAC
+ #include "../Setup/BlackHole.h"
+ #include "../Audio/ProcessTap.h"
+#endif
+
 namespace play
 {
 
@@ -36,13 +41,21 @@ WelcomePopup::WelcomePopup (juce::PropertiesFile& config, juce::AudioDeviceManag
     nextButton_.onClick    = [this] { if (currentStep_ < totalSteps - 1) goToStep (currentStep_ + 1); };
     doneButton_.onClick    = [this] { finishAndClose(); };
     supportButton_.onClick = [] { SupportPanel::launch(); };
+   #if JUCE_MAC
+    // On macOS the routing helper is BlackHole (only offered below the process-tap
+    // threshold; on 14.4+ nothing is installed and this button never shows).
+    cableButton_.setButtonText ("INSTALL BLACKHOLE");
+    cableButton_.onClick   = [this] { BlackHoleSetupComponent::launch (deviceManager_); };
+    cableButton_.setTooltip ("Guided BlackHole setup — install the free audio-routing app");
+   #else
     cableButton_.onClick   = [this] { CableSetupComponent::launch (deviceManager_); };
+    cableButton_.setTooltip ("Guided VB-CABLE install — one download, approve the prompts, reboot");
+   #endif
 
     doneButton_.setColour   (juce::TextButton::textColourOffId, accentBright);
     supportButton_.setColour (juce::TextButton::textColourOffId, accentBright);
     supportButton_.setTooltip ("Support Plugin Play — Card / Apple Pay, Venmo or Zelle");
     cableButton_.setColour (juce::TextButton::textColourOffId, accentBright);
-    cableButton_.setTooltip ("Guided VB-CABLE install — one download, approve the prompts, reboot");
 
     addAndMakeVisible (backButton_);
     addAndMakeVisible (nextButton_);
@@ -95,18 +108,39 @@ void WelcomePopup::loadStepContent()
     }
     {
         // Body lines are filled in by refreshCableStep() when the step is shown,
-        // after scanning the audio devices for an installed cable.
+        // after scanning for an installed cable / virtual device.
         StepContent s;
+       #if JUCE_MAC
+        s.title = ProcessTapCapture::isSupported() ? "How your audio gets in"
+                                                   : "Set up audio routing";
+       #else
         s.title = "Set up a virtual cable";
+       #endif
         steps_.add (s);
     }
     {
         StepContent s;
         s.title = "Choose your input";
+       #if JUCE_MAC
+        if (ProcessTapCapture::isSupported())
+        {
+            s.lines.add ({ "Open the INPUT dropdown and, under \"Capture an app\"," });
+            s.lines.add ({ "pick the app you want - DJ software, Spotify, a browser." });
+            s.lines.add ({ "Plugin Play captures it directly and mutes its own sound," });
+            s.lines.add ({ "so you only hear the processed version.", false, true });
+        }
+        else
+        {
+            s.lines.add ({ "Set your app's (or macOS's) output to BlackHole." });
+            s.lines.add ({ "Then open INPUT and pick BlackHole; set OUTPUT to your" });
+            s.lines.add ({ "speakers. You'll hear the processed sound played back.", false, true });
+        }
+       #else
         s.lines.add ({ "Easiest: open the INPUT dropdown and pick a running app." });
         s.lines.add ({ "Plugin Play routes that app through the cable for you." });
         s.lines.add ({ "Prefer manual routing? Set your DJ software's output to the" });
         s.lines.add ({ "cable, then INPUT to the cable and OUTPUT to your speakers.", false, true });
+       #endif
         steps_.add (s);
     }
     {
@@ -143,18 +177,53 @@ void WelcomePopup::loadStepContent()
 
 void WelcomePopup::refreshCableStep()
 {
-    detectedCable_ = VirtualCable::findInstalled (deviceManager_, false);
-
     auto& lines = steps_.getReference (cableStepIndex).lines;
     lines.clearQuick();
+
+    const auto installedLine = [] (const juce::String& name)
+    {
+        return juce::String (juce::CharPointer_UTF8 ("\xe2\x9c\x93 Installed:  ")) + name;
+    };
+
+   #if JUCE_MAC
+    if (ProcessTapCapture::isSupported())
+    {
+        // macOS 14.4+: the built-in process tap does everything — nothing to install.
+        // detectedCable_ stays non-empty so the install button never shows here.
+        detectedCable_ = "builtin";
+        lines.add ({ juce::String (juce::CharPointer_UTF8 ("\xe2\x9c\x93 No extra software needed on your Mac.")),
+                     false, false, true });
+        lines.add ({ "Plugin Play captures any app's audio directly and mutes" });
+        lines.add ({ "that app's own output, so you hear only your effects.", false, true });
+        lines.add ({ "Just pick an app on the next step - that's it!" });
+        return;
+    }
+
+    // macOS 11–14.3: BlackHole is the virtual device that carries the audio.
+    detectedCable_ = BlackHole::findInstalled (deviceManager_, false);
+
+    lines.add ({ "BlackHole is a free app that carries sound between apps -" });
+    lines.add ({ "it's how your music reaches Plugin Play on this macOS.", false, true });
+
+    if (detectedCable_.isNotEmpty())
+    {
+        lines.add ({ installedLine (detectedCable_), false, false, true });
+        lines.add ({ "You're all set - nothing to install here." });
+    }
+    else
+    {
+        lines.add ({ "No virtual audio device was found - you'll need BlackHole.", true });
+        lines.add ({ "Click INSTALL BLACKHOLE below for the quick setup." });
+    }
+   #else
+    detectedCable_ = VirtualCable::findInstalled (deviceManager_, false);
 
     lines.add ({ "A virtual cable is a software wire that carries sound" });
     lines.add ({ "between apps - it's how your music reaches Plugin Play.", false, true });
 
     if (detectedCable_.isNotEmpty())
     {
-        lines.add ({ juce::String (juce::CharPointer_UTF8 ("\xe2\x9c\x93 Installed:  ")) + detectedCable_,
-                     false, false, true });
+        lines.add ({ installedLine (detectedCable_), false, false, true });
         lines.add ({ "You're all set - nothing to install here." });
     }
     else
@@ -163,6 +232,7 @@ void WelcomePopup::refreshCableStep()
         lines.add ({ "Click INSTALL CABLE below for a guided install -" });
         lines.add ({ "one quick download and a reboot, that's it.", false, true });
     }
+   #endif
 }
 
 void WelcomePopup::goToStep (int newStep)
@@ -288,7 +358,7 @@ void WelcomePopup::resized()
     if (cableButton_.isVisible())
     {
         bodyArea.removeFromTop (10);
-        cableButton_.setBounds (bodyArea.removeFromTop (30).removeFromLeft (150));
+        cableButton_.setBounds (bodyArea.removeFromTop (30).removeFromLeft (180));
     }
 }
 
