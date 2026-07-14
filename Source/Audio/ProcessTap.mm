@@ -1,14 +1,18 @@
-#include "ProcessTap.h"
-
-#if JUCE_MAC
-
 // Compiled as Objective-C++ with ARC (see CMakeLists): NS objects release
 // themselves; Core Foundation objects obtained from C APIs still need CFRelease.
-
+//
+// The Apple SDK headers MUST be imported before ProcessTap.h: the generated
+// JuceHeader pulls `using namespace juce` into the global namespace, which makes
+// Carbon's Point/Component types ambiguous inside any SDK header parsed after it.
+// (This file is only ever compiled on macOS — see the if(APPLE) in CMakeLists.)
 #import <AppKit/AppKit.h>
 #import <CoreAudio/CoreAudio.h>
 #import <CoreAudio/CATapDescription.h>
 #import <CoreAudio/AudioHardwareTapping.h>
+
+#include "ProcessTap.h"
+
+#if JUCE_MAC
 
 #include <libproc.h>
 #include <signal.h>
