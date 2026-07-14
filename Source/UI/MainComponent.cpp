@@ -499,14 +499,23 @@ void LevelMeter::paint (juce::Graphics& g)
     g.fillRoundedRectangle (lamp, 2.0f);
     area.removeFromRight (4);
 
+    // Piecewise dB→bar-width map so the loud zones get more of the bar and are
+    // easier to read apart: green (-60..-18 dB) fills the first 56% (was a linear
+    // 70%), amber (-18..-6) the next 24%, red (-6..0) the final 20% (was 10%). The
+    // fill length and the coloured zones share this map, so colours stay aligned
+    // with the lit portion.
+    static constexpr float greenEnd = 0.56f;   // -18 dB
+    static constexpr float redStart_ = 0.80f;  // -6 dB
     auto proportionFor = [] (float level)
     {
         const auto dB = juce::Decibels::gainToDecibels (level, -60.0f);
-        return juce::jlimit (0.0f, 1.0f, juce::jmap (dB, -60.0f, 0.0f, 0.0f, 1.0f));
+        if (dB <= -60.0f) return 0.0f;
+        if (dB <  -18.0f) return juce::jmap (dB, -60.0f, -18.0f, 0.0f, greenEnd);
+        if (dB <   -6.0f) return juce::jmap (dB, -18.0f,  -6.0f, greenEnd, redStart_);
+        return juce::jlimit (0.0f, 1.0f, juce::jmap (dB, -6.0f, 0.0f, redStart_, 1.0f));
     };
 
-    // Zone boundaries as bar proportions: green up to -18 dB, amber to -6 dB, red
-    // above — weighted so the hot amber/red zones take a bigger share of the bar.
+    // Zone boundaries as bar proportions (from the same map, so colours line up).
     const float amberStart = proportionFor (juce::Decibels::decibelsToGain (-18.0f));
     const float redStart   = proportionFor (juce::Decibels::decibelsToGain (-6.0f));
 
@@ -753,8 +762,12 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
     outputSelector      .setTooltip ("Audio output device - where processed audio is sent");
     inputChannelSelector .setTooltip ("Which channel pair of the input device to capture");
     outputChannelSelector.setTooltip ("Which channel pair of the output device to play to");
+   #if JUCE_MAC
+    deviceTypeSelector  .setTooltip ("Audio driver type (Core Audio on macOS)");
+   #else
     deviceTypeSelector  .setTooltip ("Audio driver type. Pick 'Enable ASIO' to turn on low-latency ASIO "
                                      "for your interface (loaded on demand so a driver can't slow startup)");
+   #endif
     sampleRateSelector  .setTooltip ("Sample rate - 'Auto' follows your source to avoid an extra resample");
     bufferSizeSelector  .setTooltip ("Buffer size - smaller means lower latency, larger means more stable");
     testButton          .setTooltip ("Play a short test tone through the current output device");
@@ -825,6 +838,11 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
     chainView.onOpenEditor  = [this] (int index) { openPluginEditor (index); };
     chainView.onFloatEditor = [this] (int index, bool shouldFloat) { setPluginFloating (index, shouldFloat); };
     chainView.isFloating    = [this] (int index) { return isSlotFloating (index); };
+    chainView.isEditorOpen  = [this] (int index)
+    {
+        return juce::isPositiveAndBelow (index, engine.getNumPlugins())
+            && pluginWindows.count (engine.getSlot (index).nodeID.uid) > 0;
+    };
     chainView.onAddPlugin   = [this] { showAddPluginMenu (addPluginButton.getScreenPosition()); };
 
     viewport.setViewedComponent (&chainView, false);
@@ -1897,6 +1915,7 @@ void MainComponent::openPluginEditor (int slotIndex)
             window->setAlwaysOnTop (true);
 
         pluginWindows[key] = std::move (window);
+        chainView.refresh();   // light the slot's OPEN button now its editor is open
     }
 }
 
@@ -1925,6 +1944,7 @@ bool MainComponent::isSlotFloating (int slotIndex) const
 void MainComponent::closePluginWindow (juce::AudioProcessorGraph::NodeID nodeID)
 {
     pluginWindows.erase (nodeID.uid);
+    chainView.refresh();   // clear the slot's OPEN highlight now its editor is closed
 }
 
 //==============================================================================
