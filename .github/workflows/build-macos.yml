@@ -1,0 +1,56 @@
+# Builds the macOS app (universal arm64 + x86_64) on every push, so the Mac
+# port can be developed and kept green from a Windows machine. The built .app
+# is uploaded as a workflow artifact (unsigned — signing/notarization is a
+# later release step).
+name: macOS build
+
+on:
+  push:
+    branches: [main, add-mac]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-macos:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      # The JUCE checkout and its compiled module objects live under build/;
+      # restoring them turns a cold ~15 min build into a few minutes. The exact
+      # key (with the commit sha) never hits, so every run saves a fresh cache
+      # and the restore-keys pull the most recent one. actions/cache preserves
+      # file mtimes, so make only rebuilds what the new checkout actually changed.
+      - name: Restore build cache
+        uses: actions/cache@v4
+        with:
+          path: build
+          key: macos-build-${{ hashFiles('CMakeLists.txt') }}-${{ github.sha }}
+          restore-keys: |
+            macos-build-${{ hashFiles('CMakeLists.txt') }}-
+            macos-build-
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --parallel 3
+
+      - name: Verify universal binary
+        run: |
+          BIN="build/PluginPlay_artefacts/Release/Plugin Play.app/Contents/MacOS/Plugin Play"
+          test -f "$BIN"
+          lipo -info "$BIN"
+          lipo -archs "$BIN" | grep -q x86_64
+          lipo -archs "$BIN" | grep -q arm64
+
+      - name: Package app
+        run: ditto -c -k --keepParent "build/PluginPlay_artefacts/Release/Plugin Play.app" PluginPlay-macOS.zip
+
+      - name: Upload app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PluginPlay-macOS
+          path: PluginPlay-macOS.zip

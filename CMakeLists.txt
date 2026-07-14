@@ -2,6 +2,13 @@
 # Licensed under the GNU General Public License v3.0 (see LICENSE). Uses JUCE and
 # the Steinberg VST3 SDK under their GPLv3 grants (see THIRD_PARTY_NOTICES.md).
 cmake_minimum_required(VERSION 3.22)
+
+# macOS: universal binary (Apple silicon + Intel) and a 14.4 OS floor — the
+# first release with Core Audio process taps (CATapDescription), the per-app
+# capture API the Mac input model is built on. Must be set before project().
+set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "")
+set(CMAKE_OSX_DEPLOYMENT_TARGET "14.4" CACHE STRING "")
+
 project(PluginPlay VERSION 1.0.0 LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -36,6 +43,16 @@ juce_add_gui_app(PluginPlay
     # triangle stays legible in the taskbar/title bar instead of the whole frame
     # shrinking to a smudge.
     ICON_SMALL    "${CMAKE_SOURCE_DIR}/Resources/exe_logo_small.png"
+    # macOS TCC: microphone permission covers reading input devices (e.g. a
+    # virtual cable); NSAudioCaptureUsageDescription is the 14.4+ process-tap
+    # prompt shown when the user picks an app as the input source. Both are
+    # ignored on Windows.
+    MICROPHONE_PERMISSION_ENABLED TRUE
+    MICROPHONE_PERMISSION_TEXT "Plugin Play needs audio input access so it can run your effects on the input you pick."
+    PLIST_TO_MERGE "<plist version=\"1.0\"><dict>
+                        <key>NSAudioCaptureUsageDescription</key>
+                        <string>Plugin Play captures the audio of the app you pick as an input source, so it can run your effects on it.</string>
+                    </dict></plist>"
 )
 
 juce_generate_juce_header(PluginPlay)
@@ -64,18 +81,31 @@ target_sources(PluginPlay
         Source/UI/WelcomePopup.cpp
 )
 
-# JUCE 8 ships its own ASIO interop header, so JUCE_ASIO needs no Steinberg SDK.
 target_compile_definitions(PluginPlay
     PRIVATE
         JUCE_WEB_BROWSER=0
         JUCE_USE_CURL=0
         JUCE_PLUGINHOST_VST3=1
-        JUCE_ASIO=1
-        JUCE_WASAPI=1
-        JUCE_DIRECTSOUND=1
         JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:PluginPlay,JUCE_PRODUCT_NAME>"
         JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:PluginPlay,JUCE_VERSION>"
 )
+
+if (WIN32)
+    # JUCE 8 ships its own ASIO interop header, so JUCE_ASIO needs no Steinberg SDK.
+    target_compile_definitions(PluginPlay
+        PRIVATE
+            JUCE_ASIO=1
+            JUCE_WASAPI=1
+            JUCE_DIRECTSOUND=1
+    )
+elseif (APPLE)
+    # Mac DJs expect AudioUnit plugins alongside VST3; JUCE hosts them via the
+    # same AudioPluginFormatManager (CoreAudioKit comes in through juce_audio_utils).
+    target_compile_definitions(PluginPlay
+        PRIVATE
+            JUCE_PLUGINHOST_AU=1
+    )
+endif()
 
 target_link_libraries(PluginPlay
     PRIVATE
