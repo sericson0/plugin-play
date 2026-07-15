@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- ESSENTIAL for a plugin host. Plugin Play loads third-party VST3/AU
+         binaries that are signed by other developers (or not signed at all).
+         Under the hardened runtime, library validation rejects any code not
+         signed by our own Team ID or Apple — which would be every plugin. This
+         disables that check so the host can actually load plugins. -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+
+    <!-- Audio capture: virtual-cable input and the 14.4+ process-tap source.
+         Pairs with NSAudioCaptureUsageDescription / the microphone usage string
+         already baked into Info.plist by CMakeLists.txt. -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+
+    <!-- Many plugins JIT-compile their DSP at load/run time. Under the hardened
+         runtime that needs these two, or those plugins crash the host. Safe to
+         grant for an app whose whole job is running arbitrary plugin code. -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+</dict>
+</plist>
