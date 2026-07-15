@@ -53,6 +53,87 @@ static constexpr int saveDebounceMs     = 1000;
 static constexpr int autosaveIntervalMs = 30000;
 
 //==============================================================================
+AudioEngine::SessionWriter::SessionWriter() : juce::Thread ("Session save")
+{
+    startThread();
+}
+
+AudioEngine::SessionWriter::~SessionWriter()
+{
+    flushAndStop();
+}
+
+void AudioEngine::SessionWriter::enqueue (const juce::File& file, juce::String documentText)
+{
+    {
+        const juce::ScopedLock sl (pendingLock);
+        pendingFile = file;
+        pendingText = std::move (documentText);
+        hasPending  = true;
+    }
+
+    notify();
+}
+
+void AudioEngine::SessionWriter::flushAndStop()
+{
+    // If the thread is mid-write it finishes that write before seeing the exit
+    // flag; anything enqueued after it grabbed its snapshot is flushed here,
+    // synchronously, once the thread is gone.
+    signalThreadShouldExit();
+    notify();
+    stopThread (5000);
+    writePending();
+}
+
+void AudioEngine::SessionWriter::run()
+{
+    while (! threadShouldExit())
+    {
+        wait (-1);   // notify() latches, so an enqueue during writePending isn't lost
+        writePending();
+    }
+}
+
+void AudioEngine::SessionWriter::writePending()
+{
+    juce::File file;
+    juce::String text;
+
+    {
+        const juce::ScopedLock sl (pendingLock);
+
+        if (! hasPending)
+            return;
+
+        file = pendingFile;
+        text.swapWith (pendingText);
+        hasPending = false;
+    }
+
+    writeNow (file, text);
+}
+
+void AudioEngine::SessionWriter::writeNow (const juce::File& file, const juce::String& text)
+{
+    file.getParentDirectory().createDirectory();
+
+    // Rotate the last known-good session to a backup before overwriting, so a
+    // corrupt/truncated primary (older builds, disk trouble) can be rolled back on
+    // load rather than silently resetting the user's whole setup. The verifying
+    // parse only runs until this run's first successful write: after that the
+    // primary is our own output and known well-formed, so rotation is just a copy.
+    if (file.existsAsFile()
+         && (primaryKnownGood || juce::XmlDocument::parse (file) != nullptr))
+        file.copyFileTo (file.getSiblingFile ("session.bak"));
+
+    // replaceWithText stages the write in a temp file and swaps it in, so a crash
+    // mid-write can't leave a half-written session.xml behind.
+    if (file.replaceWithText (text))
+        primaryKnownGood = true;
+}
+
+//==============================================================================
 void AudioEngine::MeterTap::audioDeviceIOCallbackWithContext (const float* const* inputChannelData, int numInputChannels,
                                                               float* const* outputChannelData, int numOutputChannels,
                                                               int numSamples,
@@ -113,7 +194,8 @@ AudioEngine::AudioEngine()
 AudioEngine::~AudioEngine()
 {
     stopTimer();
-    saveSession();           // persists the redirect intent (mode="redirect" exe=...)
+    saveSession();               // persists the redirect intent (mode="redirect" exe=...)
+    sessionWriter.flushAndStop();   // the final save must be on disk before we exit
 
     // Restore any app we routed into the cable back to its normal output so it isn't
     // left silently playing into the cable after we exit. The saved session still
@@ -930,16 +1012,11 @@ void AudioEngine::saveSession()
 
     session.addChildElement (createChainXml().release());
 
-    auto file = getSessionFile();
-    file.getParentDirectory().createDirectory();
-
-    // Rotate the last known-good session to a backup before overwriting, so a
-    // corrupt/truncated primary (older builds, disk trouble) can be rolled back on
-    // load rather than silently resetting the user's whole setup.
-    if (file.existsAsFile() && juce::XmlDocument::parse (file) != nullptr)
-        file.copyFileTo (file.getSiblingFile ("session.bak"));
-
-    session.writeTo (file);
+    // Hand the serialized document to the background writer. Plugin state had to
+    // be collected here on the message thread, but the disk work (validating the
+    // old file, rotating session.bak, the write) mustn't stall the UI — this runs
+    // on every 30-second autosave, mid-performance.
+    sessionWriter.enqueue (getSessionFile(), session.toString());
 }
 
 //==============================================================================

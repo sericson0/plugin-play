@@ -216,6 +216,44 @@ private:
         periodically so plugin parameter tweaks survive a crash. */
     void scheduleSave();
 
+    //==============================================================================
+    /** Writes session saves to disk on a background thread. The XML has to be
+        BUILT on the message thread (collecting plugin state isn't thread-safe),
+        but the disk work — validating the old file, rotating session.bak, the
+        write itself — used to run there too, stalling the UI for every 30-second
+        autosave when a plugin carries megabytes of state. Only the latest
+        enqueued document is written; older pending ones are superseded. */
+    class SessionWriter : private juce::Thread
+    {
+    public:
+        SessionWriter();
+        ~SessionWriter() override;
+
+        /** Queues a serialized session to be written to the given file,
+            replacing any not-yet-written document. */
+        void enqueue (const juce::File& file, juce::String documentText);
+
+        /** Finishes any pending write, then stops the thread. Called at
+            shutdown so the final save can't be lost. */
+        void flushAndStop();
+
+    private:
+        void run() override;
+        void writePending();
+        void writeNow (const juce::File& file, const juce::String& text);
+
+        juce::CriticalSection pendingLock;
+        juce::File pendingFile;
+        juce::String pendingText;
+        bool hasPending = false;
+
+        // True once this run has written the file successfully: from then on the
+        // primary is known well-formed, so backup rotation can skip re-parsing it.
+        bool primaryKnownGood = false;
+
+        JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SessionWriter)
+    };
+
     std::unique_ptr<juce::XmlElement> createSlotXml (int index) const;
     std::unique_ptr<juce::XmlElement> createChainXml (bool includeGhosts = true) const;
 
@@ -323,6 +361,8 @@ private:
     };
     std::vector<GhostSlot> ghostSlots;
     void dropGhostSlots();
+
+    SessionWriter sessionWriter;
 
     JUCE_DECLARE_WEAK_REFERENCEABLE (AudioEngine)
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioEngine)
