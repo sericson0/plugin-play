@@ -15,7 +15,7 @@ using IONode = juce::AudioProcessorGraph::AudioGraphIOProcessor;
 class CaptureSourceProcessor : public juce::AudioProcessor
 {
 public:
-    explicit CaptureSourceProcessor (LoopbackCapture& c)
+    explicit CaptureSourceProcessor (AppCapture& c)
         : juce::AudioProcessor (BusesProperties()
               .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
           capture (c) {}
@@ -44,13 +44,94 @@ public:
     void setStateInformation (const void*, int) override {}
 
 private:
-    LoopbackCapture& capture;
+    AppCapture& capture;
 };
 
 // Chain edits save after a short debounce; the long interval keeps autosaving
 // so plugin parameter tweaks (which broadcast nothing) survive a crash.
 static constexpr int saveDebounceMs     = 1000;
 static constexpr int autosaveIntervalMs = 30000;
+
+//==============================================================================
+AudioEngine::SessionWriter::SessionWriter() : juce::Thread ("Session save")
+{
+    startThread();
+}
+
+AudioEngine::SessionWriter::~SessionWriter()
+{
+    flushAndStop();
+}
+
+void AudioEngine::SessionWriter::enqueue (const juce::File& file, juce::String documentText)
+{
+    {
+        const juce::ScopedLock sl (pendingLock);
+        pendingFile = file;
+        pendingText = std::move (documentText);
+        hasPending  = true;
+    }
+
+    notify();
+}
+
+void AudioEngine::SessionWriter::flushAndStop()
+{
+    // If the thread is mid-write it finishes that write before seeing the exit
+    // flag; anything enqueued after it grabbed its snapshot is flushed here,
+    // synchronously, once the thread is gone.
+    signalThreadShouldExit();
+    notify();
+    stopThread (5000);
+    writePending();
+}
+
+void AudioEngine::SessionWriter::run()
+{
+    while (! threadShouldExit())
+    {
+        wait (-1);   // notify() latches, so an enqueue during writePending isn't lost
+        writePending();
+    }
+}
+
+void AudioEngine::SessionWriter::writePending()
+{
+    juce::File file;
+    juce::String text;
+
+    {
+        const juce::ScopedLock sl (pendingLock);
+
+        if (! hasPending)
+            return;
+
+        file = pendingFile;
+        text.swapWith (pendingText);
+        hasPending = false;
+    }
+
+    writeNow (file, text);
+}
+
+void AudioEngine::SessionWriter::writeNow (const juce::File& file, const juce::String& text)
+{
+    file.getParentDirectory().createDirectory();
+
+    // Rotate the last known-good session to a backup before overwriting, so a
+    // corrupt/truncated primary (older builds, disk trouble) can be rolled back on
+    // load rather than silently resetting the user's whole setup. The verifying
+    // parse only runs until this run's first successful write: after that the
+    // primary is our own output and known well-formed, so rotation is just a copy.
+    if (file.existsAsFile()
+         && (primaryKnownGood || juce::XmlDocument::parse (file) != nullptr))
+        file.copyFileTo (file.getSiblingFile ("session.bak"));
+
+    // replaceWithText stages the write in a temp file and swaps it in, so a crash
+    // mid-write can't leave a half-written session.xml behind.
+    if (file.replaceWithText (text))
+        primaryKnownGood = true;
+}
 
 //==============================================================================
 void AudioEngine::MeterTap::audioDeviceIOCallbackWithContext (const float* const* inputChannelData, int numInputChannels,
@@ -113,7 +194,8 @@ AudioEngine::AudioEngine()
 AudioEngine::~AudioEngine()
 {
     stopTimer();
-    saveSession();           // persists the redirect intent (mode="redirect" exe=...)
+    saveSession();               // persists the redirect intent (mode="redirect" exe=...)
+    sessionWriter.flushAndStop();   // the final save must be on disk before we exit
 
     // Restore any app we routed into the cable back to its normal output so it isn't
     // left silently playing into the cable after we exit. The saved session still
@@ -519,6 +601,72 @@ bool AudioEngine::isRedirectedAppRunning() const
     return AppRouting::isProcessRunning (redirectedPid);
 }
 
+//==============================================================================
+juce::String AudioEngine::selectAppInput (juce::uint32 pid, const juce::String& exe)
+{
+   #if JUCE_MAC
+    // Process-tap capture: the tap itself mutes the app's speaker output while we
+    // read its audio, so there is no cable and no routing state to persist/undo.
+    captureStartedRate = currentSampleRate();
+
+    if (! capture.start (pid, captureStartedRate))
+    {
+        return "Couldn't capture that app's audio. If macOS asked for permission, "
+               "allow System Audio Recording for Plugin Play in System Settings > "
+               "Privacy & Security, then pick the app again.";
+    }
+
+    capturedExecutable = exe;
+    useCaptureInput = true;
+    rebuildConnections();
+    scheduleSave();
+    sendChangeMessage();
+    return {};
+   #else
+    return setRedirectedApp (pid, exe);
+   #endif
+}
+
+void AudioEngine::clearAppInput()
+{
+   #if JUCE_MAC
+    if (useCaptureInput)
+        setDeviceInput();   // stops the tap (un-muting the app) + rebuild/save/broadcast
+   #else
+    clearRedirectedApp();
+   #endif
+}
+
+bool AudioEngine::isUsingAppInput() const
+{
+   #if JUCE_MAC
+    return useCaptureInput;
+   #else
+    return isRedirectingApp();
+   #endif
+}
+
+juce::String AudioEngine::appInputName() const
+{
+   #if JUCE_MAC
+    return useCaptureInput ? capturedExecutable : juce::String();
+   #else
+    return redirectedAppName();
+   #endif
+}
+
+bool AudioEngine::isAppInputRunning() const
+{
+   #if JUCE_MAC
+    if (! useCaptureInput)
+        return true;   // no app input — nothing to detect
+
+    return ProcessTapCapture::isProcessRunning (capture.targetPid());
+   #else
+    return isRedirectedAppRunning();
+   #endif
+}
+
 void AudioEngine::applyRedirect (juce::uint32 pid, const juce::String& exe,
                                  const juce::String& captureName)
 {
@@ -642,7 +790,15 @@ void AudioEngine::restoreInputSource (const juce::XmlElement& session)
         }
 
     if (chosen != 0)
+    {
+       #if JUCE_MAC
+        // The live tap path; a failure (e.g. revoked capture permission) is
+        // swallowed at startup — the session just stays on device input.
+        selectAppInput (chosen, exe);
+       #else
         setCaptureSource (chosen);
+       #endif
+    }
 }
 
 //==============================================================================
@@ -833,7 +989,15 @@ void AudioEngine::saveSession()
         wroteInputMode = true;
     }
 
-    if constexpr (enableLoopbackCapture)   // quarantined loopback path
+    // "capture" is the live app-input mode on macOS (process tap); on Windows it
+    // belongs to the quarantined loopback path and is only written when that's on.
+   #if JUCE_MAC
+    constexpr bool captureModeSaves = true;
+   #else
+    constexpr bool captureModeSaves = enableLoopbackCapture;
+   #endif
+
+    if constexpr (captureModeSaves)
     {
         if (! wroteInputMode && useCaptureInput && capturedExecutable.isNotEmpty())
         {
@@ -848,16 +1012,11 @@ void AudioEngine::saveSession()
 
     session.addChildElement (createChainXml().release());
 
-    auto file = getSessionFile();
-    file.getParentDirectory().createDirectory();
-
-    // Rotate the last known-good session to a backup before overwriting, so a
-    // corrupt/truncated primary (older builds, disk trouble) can be rolled back on
-    // load rather than silently resetting the user's whole setup.
-    if (file.existsAsFile() && juce::XmlDocument::parse (file) != nullptr)
-        file.copyFileTo (file.getSiblingFile ("session.bak"));
-
-    session.writeTo (file);
+    // Hand the serialized document to the background writer. Plugin state had to
+    // be collected here on the message thread, but the disk work (validating the
+    // old file, rotating session.bak, the write) mustn't stall the UI — this runs
+    // on every 30-second autosave, mid-performance.
+    sessionWriter.enqueue (getSessionFile(), session.toString());
 }
 
 //==============================================================================
@@ -972,11 +1131,15 @@ void AudioEngine::loadSession()
 
                 auto& self = *weak;
 
-                // Restore the input routing now the output device is open. Re-applies an
-                // app→cable redirect (migrating legacy loopback "capture" sessions too);
-                // does nothing if the saved app isn't running this launch — the user
-                // re-picks from the dropdown.
+                // Restore the input routing now the output device is open. Windows
+                // re-applies an app→cable redirect (migrating legacy loopback "capture"
+                // sessions too); macOS re-creates the process tap. Does nothing if the
+                // saved app isn't running this launch — the user re-picks.
+               #if JUCE_MAC
+                self.restoreInputSource (*sharedSession);
+               #else
                 self.restoreRedirectFromSession (*sharedSession);
+               #endif
 
                 if (auto* chain = sharedSession->getChildByName ("CHAIN"))
                 {

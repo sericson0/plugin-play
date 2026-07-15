@@ -35,6 +35,10 @@ public:
     /** Queried when a card refreshes so its FLOAT toggle reflects the real state. */
     std::function<bool (int slotIndex)> isFloating;
 
+    /** Queried when a card refreshes so its OPEN button lights up while that
+        plugin's editor window is actually open. */
+    std::function<bool (int slotIndex)> isEditorOpen;
+
     /** Invoked when the user clicks the empty-state placeholder ("add your first
         plugin"). Wired by MainComponent to the same menu as the toolbar button. */
     std::function<void()> onAddPlugin;

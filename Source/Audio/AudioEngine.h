@@ -3,6 +3,9 @@
 #include <JuceHeader.h>
 #include "AppRouting.h"
 #include "LoopbackCapture.h"
+#if JUCE_MAC
+ #include "ProcessTap.h"
+#endif
 
 namespace play
 {
@@ -10,6 +13,16 @@ namespace play
 class MasterProcessor;
 class PluginNode;
 class CaptureSourceProcessor;
+
+/** The platform's app-audio-capture backend: a Core Audio process tap on macOS
+    (the live app-input path there), process loopback on Windows (quarantined —
+    the cable redirect is the live path; see setRedirectedApp). Both expose the
+    same start/stop/read interface. */
+#if JUCE_MAC
+using AppCapture = ProcessTapCapture;
+#else
+using AppCapture = LoopbackCapture;
+#endif
 
 //==============================================================================
 /** One entry in the serial FX chain. */
@@ -76,6 +89,30 @@ public:
     //==============================================================================
     /** Running apps that can be picked as an input source (one entry per app). */
     std::vector<AudioSource> availableCaptureSources() const { return enumerateAudioSources(); }
+
+    //==============================================================================
+    /** Selects a running app as the input source, using the platform's mechanism:
+        Windows routes the app's output into the virtual cable and reads it back
+        (setRedirectedApp); macOS taps the app's audio directly (process tap, the
+        dry signal muted at the speakers by the tap itself — no cable involved).
+        Returns "" on success, otherwise a human-readable error. */
+    juce::String selectAppInput (juce::uint32 pid, const juce::String& exe);
+
+    /** Stops app input: Windows restores the app's own output; macOS destroys the
+        tap (un-muting the app). Leaves the input device selection as-is. */
+    void clearAppInput();
+
+    /** True while an app (rather than a device) is the input source. */
+    bool isUsingAppInput() const;
+
+    /** Identity of the current app input ("" when none): exe name on Windows,
+        bundle id on macOS. */
+    juce::String appInputName() const;
+
+    /** True unless app input is active AND that app's process has exited — the UI
+        polls this to stop routing/capture and tell the user instead of letting the
+        audio silently die. Returns true when no app input is active. */
+    bool isAppInputRunning() const;
 
     /** App-to-cable input. Picking an app redirects THAT app's audio output into the
         virtual cable (via AppRouting / per-app device routing) and points Plugin
@@ -179,6 +216,44 @@ private:
         periodically so plugin parameter tweaks survive a crash. */
     void scheduleSave();
 
+    //==============================================================================
+    /** Writes session saves to disk on a background thread. The XML has to be
+        BUILT on the message thread (collecting plugin state isn't thread-safe),
+        but the disk work — validating the old file, rotating session.bak, the
+        write itself — used to run there too, stalling the UI for every 30-second
+        autosave when a plugin carries megabytes of state. Only the latest
+        enqueued document is written; older pending ones are superseded. */
+    class SessionWriter : private juce::Thread
+    {
+    public:
+        SessionWriter();
+        ~SessionWriter() override;
+
+        /** Queues a serialized session to be written to the given file,
+            replacing any not-yet-written document. */
+        void enqueue (const juce::File& file, juce::String documentText);
+
+        /** Finishes any pending write, then stops the thread. Called at
+            shutdown so the final save can't be lost. */
+        void flushAndStop();
+
+    private:
+        void run() override;
+        void writePending();
+        void writeNow (const juce::File& file, const juce::String& text);
+
+        juce::CriticalSection pendingLock;
+        juce::File pendingFile;
+        juce::String pendingText;
+        bool hasPending = false;
+
+        // True once this run has written the file successfully: from then on the
+        // primary is known well-formed, so backup rotation can skip re-parsing it.
+        bool primaryKnownGood = false;
+
+        JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SessionWriter)
+    };
+
     std::unique_ptr<juce::XmlElement> createSlotXml (int index) const;
     std::unique_ptr<juce::XmlElement> createChainXml (bool includeGhosts = true) const;
 
@@ -236,9 +311,11 @@ private:
     // never mutes an endpoint and legacy mode="capture" sessions migrate to redirect.
     static constexpr bool enableLoopbackCapture = false;
 
-    // Driverless process-loopback capture (quarantined). When useCaptureInput is true
-    // the chain head is captureSourceNode (fed by `capture`) instead of device input.
-    LoopbackCapture capture;
+    // App-audio capture backend. On macOS this is the live app-input path (process
+    // tap); on Windows it's the quarantined process-loopback capture. When
+    // useCaptureInput is true the chain head is captureSourceNode (fed by `capture`)
+    // instead of device input.
+    AppCapture capture;
     bool useCaptureInput = false;
     double captureStartedRate = 0.0;
     // Executable of the current capture target, remembered so the source survives
@@ -284,6 +361,8 @@ private:
     };
     std::vector<GhostSlot> ghostSlots;
     void dropGhostSlots();
+
+    SessionWriter sessionWriter;
 
     JUCE_DECLARE_WEAK_REFERENCEABLE (AudioEngine)
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioEngine)

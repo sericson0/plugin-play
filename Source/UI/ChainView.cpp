@@ -21,6 +21,10 @@ public:
             owner.engine.setBypassed (index, nowBypassed);
         };
 
+        // OPEN lights up (on-colour fill) while this plugin's editor window is
+        // open; clicking never toggles it — update() drives the state from the
+        // real window list.
+        openButton.setColour (juce::TextButton::buttonOnColourId, buttonSelected);
         openButton.onClick = [this]
         {
             if (owner.onOpenEditor != nullptr)
@@ -66,6 +70,9 @@ public:
 
         if (owner.isFloating != nullptr)
             floatButton.setToggleState (owner.isFloating (index), juce::dontSendNotification);
+
+        if (owner.isEditorOpen != nullptr)
+            openButton.setToggleState (owner.isEditorOpen (index), juce::dontSendNotification);
 
         repaint();
     }

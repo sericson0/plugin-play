@@ -2,10 +2,30 @@
 # Licensed under the GNU General Public License v3.0 (see LICENSE). Uses JUCE and
 # the Steinberg VST3 SDK under their GPLv3 grants (see THIRD_PARTY_NOTICES.md).
 cmake_minimum_required(VERSION 3.22)
+
+# macOS: universal binary (Apple silicon + Intel). The OS floor is 11.0 (Big Sur)
+# so the app runs on older Macs too: Core Audio process taps (macOS 14.4+) are the
+# preferred driverless per-app capture, but they are weak-linked and runtime-gated
+# (see ProcessTap.mm) so 11.0–14.3 falls back to the BlackHole virtual-device path.
+# Must be set before project().
+# FORCE so these win even over a stale value restored in a cached build dir — a
+# plain `CACHE STRING ""` set is ignored when the cache already holds a value, which
+# once shipped a binary still stamped with the old (14.4) minimum-OS floor.
+set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "" FORCE)
+set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "" FORCE)
+
 project(PluginPlay VERSION 1.0.0 LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# The process-tap capture module is Objective-C++ (Core Audio's tap API is an
+# Objective-C class).
+if (APPLE)
+    enable_language(OBJCXX)
+    set(CMAKE_OBJCXX_STANDARD 17)
+    set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
+endif()
 
 # Statically link the MSVC runtime (/MT) so the app launches on a clean Windows
 # machine that has no Visual C++ redistributable — the "single simple download"
@@ -36,6 +56,16 @@ juce_add_gui_app(PluginPlay
     # triangle stays legible in the taskbar/title bar instead of the whole frame
     # shrinking to a smudge.
     ICON_SMALL    "${CMAKE_SOURCE_DIR}/Resources/exe_logo_small.png"
+    # macOS TCC: microphone permission covers reading input devices (e.g. a
+    # virtual cable); NSAudioCaptureUsageDescription is the 14.4+ process-tap
+    # prompt shown when the user picks an app as the input source. Both are
+    # ignored on Windows.
+    MICROPHONE_PERMISSION_ENABLED TRUE
+    MICROPHONE_PERMISSION_TEXT "Plugin Play needs audio input access so it can run your effects on the input you pick."
+    PLIST_TO_MERGE "<plist version=\"1.0\"><dict>
+                        <key>NSAudioCaptureUsageDescription</key>
+                        <string>Plugin Play captures the audio of the app you pick as an input source, so it can run your effects on it.</string>
+                    </dict></plist>"
 )
 
 juce_generate_juce_header(PluginPlay)
@@ -54,9 +84,11 @@ target_sources(PluginPlay
         Source/Audio/AppRouting.cpp
         Source/Audio/LoopbackCapture.cpp
         Source/Audio/WasapiEndpoints.cpp
+        Source/Plugins/OutOfProcessScanner.cpp
         Source/Plugins/PluginScanner.cpp
         Source/Setup/UpdateCheck.cpp
         Source/Setup/VirtualCable.cpp
+        Source/Setup/BlackHole.cpp
         Source/UI/MainComponent.cpp
         Source/UI/ChainView.cpp
         Source/UI/PluginPicker.cpp
@@ -64,18 +96,39 @@ target_sources(PluginPlay
         Source/UI/WelcomePopup.cpp
 )
 
-# JUCE 8 ships its own ASIO interop header, so JUCE_ASIO needs no Steinberg SDK.
+if (APPLE)
+    # Per-app capture via Core Audio process taps (macOS 14.4+). ARC just for this
+    # file — JUCE itself builds without it.
+    target_sources(PluginPlay PRIVATE Source/Audio/ProcessTap.mm)
+    set_source_files_properties(Source/Audio/ProcessTap.mm
+        PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+endif()
+
 target_compile_definitions(PluginPlay
     PRIVATE
         JUCE_WEB_BROWSER=0
         JUCE_USE_CURL=0
         JUCE_PLUGINHOST_VST3=1
-        JUCE_ASIO=1
-        JUCE_WASAPI=1
-        JUCE_DIRECTSOUND=1
         JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:PluginPlay,JUCE_PRODUCT_NAME>"
         JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:PluginPlay,JUCE_VERSION>"
 )
+
+if (WIN32)
+    # JUCE 8 ships its own ASIO interop header, so JUCE_ASIO needs no Steinberg SDK.
+    target_compile_definitions(PluginPlay
+        PRIVATE
+            JUCE_ASIO=1
+            JUCE_WASAPI=1
+            JUCE_DIRECTSOUND=1
+    )
+elseif (APPLE)
+    # Mac DJs expect AudioUnit plugins alongside VST3; JUCE hosts them via the
+    # same AudioPluginFormatManager (CoreAudioKit comes in through juce_audio_utils).
+    target_compile_definitions(PluginPlay
+        PRIVATE
+            JUCE_PLUGINHOST_AU=1
+    )
+endif()
 
 target_link_libraries(PluginPlay
     PRIVATE

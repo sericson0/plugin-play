@@ -2,6 +2,7 @@
 #include "Theme.h"
 #include "Audio/AppRouting.h"
 #include "Audio/AudioEngine.h"
+#include "Plugins/OutOfProcessScanner.h"
 #include "Plugins/PluginScanner.h"
 #include "UI/MainComponent.h"
 
@@ -15,14 +16,24 @@ public:
     const juce::String getApplicationVersion() override { return JUCE_APPLICATION_VERSION_STRING; }
     bool moreThanOneInstanceAllowed() override
     {
-        // Single-instance for normal launches. The uninstaller's headless
-        // --cleanup-redirects run is exempt: it must do its cleanup and exit even if
-        // (or especially if) the app is still open, not raise the existing window.
-        return getCommandLineParameters().contains ("--cleanup-redirects");
+        // Single-instance for normal launches. Two exemptions: the uninstaller's
+        // headless --cleanup-redirects run (it must do its cleanup and exit even if
+        // the app is still open, not raise the existing window), and plugin-scan
+        // worker processes (spawned BY the running instance, so they must never be
+        // treated as "another copy of the app").
+        return getCommandLineParameters().contains ("--cleanup-redirects")
+            || play::isScanWorkerCommandLine (getCommandLineParameters());
     }
 
     void initialise (const juce::String& commandLine) override
     {
+        // Plugin-scan worker mode: this process exists only to examine plugin files
+        // for the real Plugin Play instance that launched it, so a crashy plugin
+        // kills this helper instead of the app. No UI, no engine, no session — it
+        // quits itself when the parent disconnects.
+        if ((scanWorker = play::createScanWorkerIfNeeded (commandLine)) != nullptr)
+            return;
+
         // Headless mode used by the uninstaller: if a crashed run left an app's audio
         // routed into the virtual cable (redirect.marker still present), restore that
         // app's normal output before Plugin Play disappears for good — otherwise the
@@ -88,6 +99,7 @@ public:
         mainWindow = nullptr;   // closes plugin windows via MainComponent
         scanner = nullptr;
         engine = nullptr;       // saves the session
+        scanWorker = nullptr;
         juce::LookAndFeel::setDefaultLookAndFeel (nullptr);
     }
 
@@ -182,6 +194,9 @@ private:
     std::unique_ptr<play::AudioEngine> engine;
     std::unique_ptr<play::PluginScanner> scanner;
     std::unique_ptr<MainWindow> mainWindow;
+
+    // Non-null only when this process was launched as a plugin-scan worker.
+    std::unique_ptr<juce::ChildProcessWorker> scanWorker;
 };
 
 //==============================================================================

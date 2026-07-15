@@ -6,6 +6,11 @@
 #include "../Setup/UpdateCheck.h"
 #include "BinaryData.h"
 
+#if JUCE_MAC
+ #include "../Setup/BlackHole.h"
+ #include "../Audio/ProcessTap.h"
+#endif
+
 namespace play
 {
 
@@ -36,7 +41,12 @@ public:
             logo = logo.getClippedImage ({ 0, y, logo.getWidth(), h });
         }
 
-        const char* names[numTabs] = { "Overview", "Virtual Cable", "Audio Settings",
+       #if JUCE_MAC
+        const char* const routingTabName = "Audio Routing";   // BlackHole / built-in capture
+       #else
+        const char* const routingTabName = "Virtual Cable";
+       #endif
+        const char* names[numTabs] = { "Overview", routingTabName, "Audio Settings",
                                        "Plugins", "Troubleshooting" };
         for (int i = 0; i < numTabs; ++i)
         {
@@ -62,6 +72,9 @@ public:
         cableSetupButton.setTooltip ("Check for - or install - the virtual audio cable");
         cableSetupButton.onClick = [this] { CableSetupComponent::launch (deviceManager); };
         addAndMakeVisible (cableSetupButton);
+       #if ! JUCE_WINDOWS
+        cableSetupButton.setVisible (false);   // VB-CABLE is a Windows concept
+       #endif
 
         doc.setMultiLine (true);
         doc.setReadOnly (true);
@@ -167,11 +180,26 @@ private:
     {
         addHeading ("PLUGIN PLAY - Version " + juce::JUCEApplication::getInstance()->getApplicationVersion());
         addBody (
-            "Plugin Play is a user-friendly host for VST3 effects. "
+            "Plugin Play is a user-friendly host for " + pluginFormatsLabel + " effects. "
                  "Easily add EQ, dehissing, limiters and more. "
                  "It can connect to any audio source or DJ software.");
 
         addHeading ("GETTING STARTED");
+       #if JUCE_MAC
+        if (play::ProcessTapCapture::isSupported())
+            addBody ("1.  INPUT - Plugin Play can capture any app directly, with no extra\n"
+                     "     software. Just pick it in the INPUT dropdown under \"Capture an app\".\n"
+                     "2.  OUTPUT - pick your speakers or audio interface. See Audio Settings.\n"
+                     "3.  Add and rearrange plugins to build your effect chain. See the\n"
+                     "     Plugins tab.");
+        else
+            addBody ("1.  AUDIO ROUTING - Plugin Play uses BlackHole to bring another app's\n"
+                     "     sound in. See the Audio Routing tab to install it.\n"
+                     "2.  INPUT & OUTPUT - set your app's output to BlackHole, pick BlackHole\n"
+                     "     as the input here, and your speakers as the output. See Audio Settings.\n"
+                     "3.  Add and rearrange plugins to build your effect chain. See the\n"
+                     "     Plugins tab.");
+       #else
         addBody ("1.  VIRTUAL CABLE - Plugin Play uses a virtual cable to connect to\n"
                  "     your audio player. See the Virtual Cable tab to install.\n"
                  "2.  INPUT & OUTPUT - pick your audio player as the input, and your\n"
@@ -179,6 +207,7 @@ private:
                  "     CABLE Output as your DJ software's output and Plugin Play's input.\n"
                  "3.  Add and rearrange plugins to build your effect chain. See the\n"
                  "     Plugins tab.");
+       #endif
 
         addHeading ("TIPS");
         addBody ("- Hover over any control for a tooltip that explains it.\n"
@@ -195,6 +224,51 @@ private:
 
     void populateVirtualCable()
     {
+       #if JUCE_MAC
+        if (play::ProcessTapCapture::isSupported())
+        {
+            addHeading ("NO SETUP NEEDED ON YOUR MAC");
+            addBody ("Your macOS version (14.4 or newer) lets Plugin Play capture any app's "
+                     "audio directly - no cable, no extra software.");
+
+            addHeading ("HOW IT WORKS");
+            addBody ("1.  Open the INPUT dropdown and, under 'Capture an app', pick the app\n"
+                     "     you want (your DJ software, Spotify, a browser...).\n"
+                     "2.  Plugin Play captures that app and mutes its own output, so you only\n"
+                     "     hear the processed sound.\n"
+                     "3.  Set OUTPUT to your speakers or interface - it can even be the same\n"
+                     "     speakers the app was using.");
+
+            addHeading ("PERMISSION");
+            addBody ("The first time you capture an app, macOS asks for System Audio Recording "
+                     "permission - allow it. You can change this later in System Settings > "
+                     "Privacy & Security.");
+            return;
+        }
+
+        addHeading ("WHAT IT'S FOR");
+        addBody ("On this macOS version, Plugin Play uses BlackHole - a free virtual audio "
+                 "device - to carry another app's sound in: the app plays into BlackHole, and "
+                 "Plugin Play reads BlackHole as its input.");
+
+        addHeading ("SETTING IT UP");
+        addBody ("1.  Click AUDIO ROUTING (in the header until a device is installed, and\n"
+                 "     always at the top of this window) - it checks for BlackHole.\n"
+                 "2.  If none is found, it gives you a one-line Homebrew command to copy,\n"
+                 "     or a link to the BlackHole download page.\n"
+                 "3.  After installing, RESTART YOUR MAC so BlackHole loads - the new device\n"
+                 "     usually won't appear until you do (or run 'sudo killall coreaudiod').\n"
+                 "4.  Open AUDIO ROUTING again and Re-check.");
+
+        addHeading ("ROUTING AN APP");
+        addBody ("Set the app's (or macOS's) output to 'BlackHole 2ch'. Then in Plugin Play, "
+                 "set INPUT to 'BlackHole 2ch' and OUTPUT to your speakers or interface. "
+                 "On macOS 14.4 or newer none of this is needed - Plugin Play captures apps directly.");
+
+        addHeading ("NOTE");
+        addBody ("Don't set the app's output volume too low - doing so can raise the noise floor.\n"
+                 "Instead, adjust the volume with your Mac's output volume, DAC or mixer.");
+       #else
         addHeading ("WHAT IT'S FOR");
         addBody ("A virtual cable is a software 'wire' that carries sound between apps:\n"
                  "your DJ software plays into the cable, and Plugin Play reads the cable as its input.");
@@ -214,10 +288,38 @@ private:
         addHeading ("NOTE");
         addBody ("Don't set your DJ software's output volume too low - doing so can raise the noise floor.\n"
                  "Instead, adjust the volume with your computer's output volume, DAC or mixer.");
+       #endif
     }
 
     void populateAudioSettings()
     {
+       #if JUCE_MAC
+        if (play::ProcessTapCapture::isSupported())
+        {
+            addHeading ("INPUT & OUTPUT");
+            addBody ("The device bar below the meters has INPUT and OUTPUT selectors.\n"
+                     "Set OUTPUT to your speakers or audio interface. For INPUT, either pick a "
+                     "hardware input, or pick a running app under 'Capture an app'.");
+
+            addHeading ("CAPTURING AN APP (NO CABLE)");
+            addBody ("Under 'Capture an app' in the INPUT dropdown, pick one (e.g. Spotify). "
+                     "Plugin Play taps its audio directly and mutes the app's own output, so you "
+                     "only hear the processed sound - even out of the same speakers.\n"
+                     "It stops and un-mutes the app when you switch away or it quits.");
+        }
+        else
+        {
+            addHeading ("INPUT & OUTPUT");
+            addBody ("The device bar below the meters has INPUT and OUTPUT selectors.\n"
+                     "Set OUTPUT to your speakers or audio interface. Set INPUT to BlackHole, "
+                     "and set BlackHole as the output in the app you want to process.");
+
+            addHeading ("SENDING AN APP THROUGH PLUGIN PLAY");
+            addBody ("Route the app's output to BlackHole, then pick BlackHole as the INPUT here. "
+                     "On macOS 14.4 or newer you can skip this and pick the app directly under "
+                     "'Capture an app'.");
+        }
+       #else
         addHeading ("INPUT & OUTPUT");
         addBody ("The device bar below the meters has INPUT and OUTPUT selectors.\n"
                  "Set OUTPUT to your speakers or audio interface. Set INPUT to the "
@@ -227,11 +329,17 @@ private:
         addBody ("The INPUT dropdown also lists running apps. Pick one (e.g. Spotify) "
                  "and Plugin Play routes it through the cable for you.\n"
                  "It returns the app's output to normal when you switch away or quit.");
+       #endif
 
         addHeading ("ADVANCED CONTROLS");
+       #if JUCE_MAC
+        addBody ("Expand the panel for INPUT / OUTPUT PAIR (which channels of a "
+                 "multi-channel device), RATE and BUFFER.");
+       #else
         addBody ("Expand the panel for INPUT / OUTPUT PAIR (which channels of a "
                  "multi-channel device), DRIVER (e.g. Windows Audio or ASIO), RATE "
                  "and BUFFER.");
+       #endif
 
         addHeading ("SAMPLE RATE & BUFFER SIZE");
         addBody ("'Auto - match source' follows your input's rate so audio isn't "
@@ -247,9 +355,9 @@ private:
     void populatePlugins()
     {
         addHeading ("SCANNING FOR PLUGINS");
-        addBody ("Your VST3 effects are scanned automatically on first launch. Run "
-                 "SCAN PLUGINS again after installing new plugins, or use its menu "
-                 "to add folders outside the standard VST3 locations.");
+        addBody ("Your " + pluginFormatsLabel + " effects are scanned automatically on first "
+                 "launch. Run SCAN PLUGINS again after installing new plugins, or use its menu "
+                 "to add folders outside the standard plugin locations.");
 
         addHeading ("BUILDING A CHAIN");
         addBody ("+ Add Plugin appends an effect. Audio flows top to bottom, so the "
@@ -273,11 +381,24 @@ private:
     void populateTroubleshooting()
     {
         addHeading ("NO SOUND / METERS NOT MOVING");
+       #if JUCE_MAC
+        if (play::ProcessTapCapture::isSupported())
+            addBody ("- Check OUTPUT is set to the right device and press TEST OUTPUT.\n"
+                     "- Make sure the app you picked under 'Capture an app' is playing.\n"
+                     "- If you denied the System Audio Recording prompt, allow it in\n"
+                     "   System Settings > Privacy & Security, then pick the app again.");
+        else
+            addBody ("- Check OUTPUT is set to the right device and press TEST OUTPUT.\n"
+                     "- Make sure the app is playing and its output is set to BlackHole.\n"
+                     "- Confirm INPUT is BlackHole, and the app's output volume isn't\n"
+                     "   turned down too low.");
+       #else
         addBody ("- Check OUTPUT is set to the right device and press TEST OUTPUT.\n"
                  "- Make sure your DJ software is playing, and its output is set\n"
                  "   to the virtual cable.\n"
                  "- Confirm INPUT is the matching cable output, and the DJ\n"
                  "   software's output volume isn't turned down too low.");
+       #endif
 
         addHeading ("EFFECTS AREN'T CHANGING THE SOUND");
         addBody ("Check the master button reads FX ON, check the effect's own "
@@ -286,7 +407,7 @@ private:
 
         addHeading ("A PLUGIN DOESN'T APPEAR");
         addBody ("Run SCAN PLUGINS again, using its menu to add the plugin's folder "
-                 "if needed. Only VST3 effect plugins are supported.");
+                 "if needed. Only " + pluginFormatsLabel + " effect plugins are supported.");
 
         addHeading ("CRACKLES, DROPOUTS OR RESAMPLING");
         addBody ("Raise the BUFFER size in Audio Settings, use 'Auto - match source' "
@@ -380,14 +501,23 @@ void LevelMeter::paint (juce::Graphics& g)
     g.fillRoundedRectangle (lamp, 2.0f);
     area.removeFromRight (4);
 
+    // Piecewise dB→bar-width map so the loud zones get more of the bar and are
+    // easier to read apart: green (-60..-18 dB) fills the first 56% (was a linear
+    // 70%), amber (-18..-6) the next 24%, red (-6..0) the final 20% (was 10%). The
+    // fill length and the coloured zones share this map, so colours stay aligned
+    // with the lit portion.
+    static constexpr float greenEnd = 0.56f;   // -18 dB
+    static constexpr float redStart_ = 0.80f;  // -6 dB
     auto proportionFor = [] (float level)
     {
         const auto dB = juce::Decibels::gainToDecibels (level, -60.0f);
-        return juce::jlimit (0.0f, 1.0f, juce::jmap (dB, -60.0f, 0.0f, 0.0f, 1.0f));
+        if (dB <= -60.0f) return 0.0f;
+        if (dB <  -18.0f) return juce::jmap (dB, -60.0f, -18.0f, 0.0f, greenEnd);
+        if (dB <   -6.0f) return juce::jmap (dB, -18.0f,  -6.0f, greenEnd, redStart_);
+        return juce::jlimit (0.0f, 1.0f, juce::jmap (dB, -6.0f, 0.0f, redStart_, 1.0f));
     };
 
-    // Zone boundaries as bar proportions: green up to -18 dB, amber to -6 dB, red
-    // above — weighted so the hot amber/red zones take a bigger share of the bar.
+    // Zone boundaries as bar proportions (from the same map, so colours line up).
     const float amberStart = proportionFor (juce::Decibels::decibelsToGain (-18.0f));
     const float redStart   = proportionFor (juce::Decibels::decibelsToGain (-6.0f));
 
@@ -494,7 +624,14 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
     : engine (engineToUse), scanner (scannerToUse)
 {
     scanButton.onClick      = [this] { showScanMenu(); };
+   #if JUCE_MAC
+    // On macOS the "virtual device" is BlackHole (the fallback used when process
+    // taps aren't available); the header button opens its guided setup.
+    cableButton.setButtonText ("AUDIO ROUTING");
+    cableButton.onClick     = [this] { BlackHoleSetupComponent::launch (engine.deviceManager); };
+   #else
     cableButton.onClick     = [this] { CableSetupComponent::launch (engine.deviceManager); };
+   #endif
     updateButton.onClick    = [this] { checkForUpdates(); };
     supportButton.onClick   = [this] { SupportPanel::launch(); };
     helpButton.onClick      = [this] { showHelp(); };
@@ -515,8 +652,12 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
     // buttons rather than a filled orange call-to-action.
     addPluginButton.onClick = [this] { showAddPluginMenu (addPluginButton.getScreenPosition()); };
 
-    scanButton    .setTooltip ("Scan for installed VST3 plugins, or manage extra scan folders");
+    scanButton    .setTooltip ("Scan for installed " + pluginFormatsLabel + " plugins, or manage extra scan folders");
+   #if JUCE_MAC
+    cableButton   .setTooltip ("Set up BlackHole to route another app's audio through Plugin Play");
+   #else
     cableButton   .setTooltip ("Set up the virtual audio cable that captures your DJ software");
+   #endif
     updateButton  .setTooltip ("Check GitHub for a newer version of Plugin Play");
     supportButton .setTooltip ("Support Plugin Play - Card / Apple Pay, Venmo or Zelle");
     helpButton    .setTooltip ("Open the Plugin Play help & documentation (and the GUIDE walkthrough)");
@@ -607,14 +748,28 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
         // repopulates every selector for the new driver's devices.
     };
 
+   #if JUCE_MAC
+    if (play::ProcessTapCapture::isSupported())
+        inputSelector   .setTooltip ("Where Plugin Play gets its audio: an input device, or a running "
+                                     "app - pick an app under 'Capture an app' and Plugin Play taps it "
+                                     "directly, no cable needed");
+    else
+        inputSelector   .setTooltip ("Where Plugin Play gets its audio: an input device such as BlackHole "
+                                     "(route your app's output to BlackHole, then pick it here)");
+   #else
     inputSelector       .setTooltip ("Where Plugin Play gets its audio: an input device (e.g. the virtual "
                                      "cable), or a running app - pick an app and Plugin Play routes it "
                                      "through the cable for you (needs a virtual cable installed)");
+   #endif
     outputSelector      .setTooltip ("Audio output device - where processed audio is sent");
     inputChannelSelector .setTooltip ("Which channel pair of the input device to capture");
     outputChannelSelector.setTooltip ("Which channel pair of the output device to play to");
+   #if JUCE_MAC
+    deviceTypeSelector  .setTooltip ("Audio driver type (Core Audio on macOS)");
+   #else
     deviceTypeSelector  .setTooltip ("Audio driver type. Pick 'Enable ASIO' to turn on low-latency ASIO "
                                      "for your interface (loaded on demand so a driver can't slow startup)");
+   #endif
     sampleRateSelector  .setTooltip ("Sample rate - 'Auto' follows your source to avoid an extra resample");
     bufferSizeSelector  .setTooltip ("Buffer size - smaller means lower latency, larger means more stable");
     testButton          .setTooltip ("Play a short test tone through the current output device");
@@ -685,6 +840,11 @@ MainComponent::MainComponent (AudioEngine& engineToUse, PluginScanner& scannerTo
     chainView.onOpenEditor  = [this] (int index) { openPluginEditor (index); };
     chainView.onFloatEditor = [this] (int index, bool shouldFloat) { setPluginFloating (index, shouldFloat); };
     chainView.isFloating    = [this] (int index) { return isSlotFloating (index); };
+    chainView.isEditorOpen  = [this] (int index)
+    {
+        return juce::isPositiveAndBelow (index, engine.getNumPlugins())
+            && pluginWindows.count (engine.getSlot (index).nodeID.uid) > 0;
+    };
     chainView.onAddPlugin   = [this] { showAddPluginMenu (addPluginButton.getScreenPosition()); };
 
     viewport.setViewedComponent (&chainView, false);
@@ -1012,7 +1172,7 @@ void MainComponent::showAddPluginMenu (juce::Point<int> screenPosition)
     {
         juce::PopupMenu menu;
         menu.addItem (1, scanner.isScanning() ? "Scanning for plugins..."
-                                              : "No VST3 plugins found - scan now",
+                                              : "No plugins found - scan now",
                       ! scanner.isScanning());
 
         menu.showMenuAsync (juce::PopupMenu::Options().withMousePosition(),
@@ -1084,7 +1244,7 @@ void MainComponent::showScanMenu()
 void MainComponent::addScanFolder()
 {
     scanFolderChooser = std::make_unique<juce::FileChooser> (
-        "Choose a folder to scan for VST3 plugins", juce::File(), juce::String());
+        "Choose a folder to scan for plugins", juce::File(), juce::String());
 
     scanFolderChooser->launchAsync (
         juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
@@ -1306,8 +1466,8 @@ void MainComponent::refreshInputSelector()
 
     auto* type = engine.deviceManager.getCurrentDeviceTypeObject();
     const auto selectedDevice = engine.deviceManager.getAudioDeviceSetup().inputDeviceName;
-    const bool redirecting = engine.isRedirectingApp();
-    const auto redirectedApp = engine.redirectedAppName();
+    const bool redirecting = engine.isUsingAppInput();
+    const auto redirectedApp = engine.appInputName();
 
     inputSelector.clear (juce::dontSendNotification);
 
@@ -1324,22 +1484,36 @@ void MainComponent::refreshInputSelector()
         }
     }
 
-    // 2) Running apps (ids captureItemBase + index). Picking one redirects that app's
-    //    audio into the cable and reads it back — Plugin Play wires the cable for you.
+    // 2) Running apps (ids captureItemBase + index). Windows: picking one redirects
+    //    that app's audio into the cable and reads it back. macOS: picking one taps
+    //    the app directly (its own speaker output goes quiet) — no cable at all.
     captureSources = engine.availableCaptureSources();
 
     if (! captureSources.empty())
     {
         inputSelector.addSeparator();
         if (auto* root = inputSelector.getRootMenu())
+           #if JUCE_MAC
+            root->addSectionHeader ("Capture an app (no cable needed)");
+           #else
             root->addSectionHeader ("Send an app through Plugin Play");
+           #endif
 
         for (size_t i = 0; i < captureSources.size(); ++i)
         {
             const auto& s = captureSources[i];
+           #if JUCE_MAC
+            // The Mac `executable` is a bundle id (com.spotify.client) — lead with
+            // the app's friendly name instead.
+            auto label = s.displayName.isNotEmpty()
+                             ? s.displayName
+                             : (s.executable.isNotEmpty() ? s.executable
+                                                          : "PID " + juce::String (s.pid));
+           #else
             auto label = s.executable.isNotEmpty() ? s.executable : ("PID " + juce::String (s.pid));
             if (s.displayName.isNotEmpty() && ! s.displayName.equalsIgnoreCase (s.executable))
                 label << "  \xe2\x80\x94  " << s.displayName;
+           #endif
             if (s.active)
                 label << "   [ACTIVE]";
 
@@ -1363,7 +1537,11 @@ void MainComponent::refreshInputSelector()
         else
         {
             const int id = captureItemBase + (int) captureSources.size();
+           #if JUCE_MAC
+            inputSelector.addItem (redirectedApp + "   [capturing]", id);
+           #else
             inputSelector.addItem (redirectedApp + "   [routed]", id);
+           #endif
             inputSelector.setSelectedId (id, juce::dontSendNotification);
         }
     }
@@ -1496,10 +1674,11 @@ void MainComponent::applyInputSelection()
 {
     const auto id = inputSelector.getSelectedId();
 
-    // An app: redirect its audio into the cable and read it back. The engine sets the
-    // input device to the cable's recording endpoint for us. If no cable is installed
-    // (or routing is unsupported), tell the user and offer the cable setup, then revert
-    // the selection to whatever the input device currently is.
+    // An app was picked. Windows: redirect its audio into the cable and read it back
+    // (the engine sets the input device to the cable's recording endpoint for us);
+    // if no cable is installed, tell the user and offer the cable setup. macOS: tap
+    // the app directly; a failure there is a capture-permission problem, not a cable
+    // one. Either way revert the dropdown to the real input device on failure.
     if (id >= captureItemBase)
     {
         const auto index = (size_t) (id - captureItemBase);
@@ -1507,12 +1686,16 @@ void MainComponent::applyInputSelection()
             return;
 
         const auto& source = captureSources[index];
-        const auto error = engine.setRedirectedApp (source.pid, source.executable);
+        const auto error = engine.selectAppInput (source.pid, source.executable);
 
         if (error.isNotEmpty())
         {
             buildDeviceSelectors();   // revert the dropdown to the real input device
 
+           #if JUCE_MAC
+            juce::AlertWindow::showMessageBoxAsync (
+                juce::MessageBoxIconType::InfoIcon, "Couldn't capture that app", error);
+           #else
             juce::AlertWindow::showOkCancelBox (
                 juce::MessageBoxIconType::InfoIcon, "Couldn't route that app",
                 error, "Set up cable", "Cancel", this,
@@ -1522,13 +1705,14 @@ void MainComponent::applyInputSelection()
                         if (r == 1 && safe != nullptr)
                             CableSetupComponent::launch (safe->engine.deviceManager);
                     }));
+           #endif
         }
         return;
     }
 
-    // A real audio input device: stop any app redirect, then apply the device.
-    if (engine.isRedirectingApp())
-        engine.clearRedirectedApp();
+    // A real audio input device: stop any app input, then apply the device.
+    if (engine.isUsingAppInput())
+        engine.clearAppInput();
 
     applyDeviceSelection();
 }
@@ -1733,6 +1917,7 @@ void MainComponent::openPluginEditor (int slotIndex)
             window->setAlwaysOnTop (true);
 
         pluginWindows[key] = std::move (window);
+        chainView.refresh();   // light the slot's OPEN button now its editor is open
     }
 }
 
@@ -1761,6 +1946,7 @@ bool MainComponent::isSlotFloating (int slotIndex) const
 void MainComponent::closePluginWindow (juce::AudioProcessorGraph::NodeID nodeID)
 {
     pluginWindows.erase (nodeID.uid);
+    chainView.refresh();   // clear the slot's OPEN highlight now its editor is closed
 }
 
 //==============================================================================
@@ -1895,15 +2081,10 @@ void MainComponent::updateSourceIndicator()
         text   = redirectNotice;
         colour = metricWarn;
     }
-    else if (engine.isRedirectingApp())
+    else if (engine.isUsingAppInput())
     {
-        // Persistent "we're routing this app" readout: just the program name,
-        // without its .exe suffix. \xe2\x96\xb6 = ▶
-        auto app = engine.redirectedAppName();
-        if (app.endsWithIgnoreCase (".exe"))
-            app = app.dropLastCharacters (4);
-
-        text << "\xe2\x96\xb6  " << app;
+        // Persistent "we're using this app as the input" readout. \xe2\x96\xb6 = ▶
+        text << "\xe2\x96\xb6  " << friendlyAppInputName();
     }
 
     sourceIndicator.setText (text, juce::dontSendNotification);
@@ -1912,6 +2093,7 @@ void MainComponent::updateSourceIndicator()
 
 void MainComponent::updateHeaderButtons()
 {
+   #if JUCE_WINDOWS
     // Once a cable is installed the VIRTUAL CABLE setup button has done its job, so
     // its header slot becomes CHECK UPDATES (cable setup stays reachable from HELP
     // and the walkthrough). If the cable is ever uninstalled, the setup button comes
@@ -1920,6 +2102,29 @@ void MainComponent::updateHeaderButtons()
 
     cableButton .setVisible (! cableInstalled);
     updateButton.setVisible (cableInstalled);
+   #elif JUCE_MAC
+    if (ProcessTapCapture::isSupported())
+    {
+        // macOS 14.4+: process taps are driverless, so no virtual device is needed
+        // and the header slot is always CHECK UPDATES.
+        cableInstalled = true;
+        cableButton .setVisible (false);
+        updateButton.setVisible (true);
+    }
+    else
+    {
+        // macOS 11–14.3: the BlackHole virtual device is the routing path. The
+        // AUDIO ROUTING setup button shows until BlackHole is installed, then gives
+        // its slot to CHECK UPDATES (setup stays reachable from HELP).
+        cableInstalled = BlackHole::findInstalled (engine.deviceManager, false).isNotEmpty();
+        cableButton .setVisible (! cableInstalled);
+        updateButton.setVisible (cableInstalled);
+    }
+   #else
+    cableInstalled = false;
+    cableButton .setVisible (false);
+    updateButton.setVisible (true);
+   #endif
 }
 
 void MainComponent::rescanDevices()
@@ -1990,18 +2195,40 @@ void MainComponent::checkForUpdates()
         });
 }
 
+juce::String MainComponent::friendlyAppInputName() const
+{
+    auto app = engine.appInputName();
+
+   #if JUCE_MAC
+    // The Mac identity is a bundle id — swap in the enumerated friendly name.
+    for (const auto& s : captureSources)
+        if (s.executable.equalsIgnoreCase (app) && s.displayName.isNotEmpty())
+            return s.displayName;
+   #else
+    if (app.endsWithIgnoreCase (".exe"))
+        app = app.dropLastCharacters (4);
+   #endif
+
+    return app;
+}
+
 void MainComponent::checkRedirectedAppAlive()
 {
-    if (! engine.isRedirectingApp() || engine.isRedirectedAppRunning())
+    if (! engine.isUsingAppInput() || engine.isAppInputRunning())
         return;
 
-    // The app we were routing has exited; audio would otherwise just go silent with a
-    // stale selection. Stop routing (restores the app's own output) and tell the user.
-    const auto app = engine.redirectedAppName();
-    engine.clearRedirectedApp();
+    // The app we were using as the input has exited; audio would otherwise just go
+    // silent with a stale selection. Stop (Windows restores the app's own output;
+    // macOS drops the tap) and tell the user.
+    const auto app = friendlyAppInputName();
+    engine.clearAppInput();
     buildDeviceSelectors();
 
+   #if JUCE_MAC
+    redirectNotice      = app + " closed \xe2\x80\x94 capture stopped";
+   #else
     redirectNotice      = app + " closed \xe2\x80\x94 routing stopped";
+   #endif
     redirectNoticeTicks = 30 * 6;   // ~6 seconds at 30 Hz
     updateSourceIndicator();
 }

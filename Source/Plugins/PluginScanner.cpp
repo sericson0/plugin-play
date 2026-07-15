@@ -1,4 +1,5 @@
 #include "PluginScanner.h"
+#include "OutOfProcessScanner.h"
 
 namespace play
 {
@@ -16,6 +17,11 @@ PluginScanner::PluginScanner (juce::AudioPluginFormatManager& fm, juce::Properti
       formatManager (fm),
       properties (props)
 {
+    // Examine each candidate plugin in a worker process, so a plugin that crashes
+    // or hangs while being catalogued can't take the app down with it (the first
+    // launch runs a full automatic scan). See OutOfProcessScanner.
+    knownPlugins.setCustomScanner (std::make_unique<OutOfProcessScanner>());
+
     if (auto savedList = properties.getXmlValue ("knownPlugins"))
         knownPlugins.recreateFromXml (*savedList);
 
@@ -84,36 +90,43 @@ void PluginScanner::removeUserScanPath (const juce::String& path)
 
 void PluginScanner::run()
 {
-    juce::AudioPluginFormat* vst3Format = nullptr;
-
-    for (auto* format : formatManager.getFormats())
-        if (format->getName() == "VST3")
-            vst3Format = format;
-
-    if (vst3Format == nullptr)
-        return;
-
     auto pedalFile = getDeadMansPedalFile();
     pedalFile.getParentDirectory().createDirectory();
 
-    // Default OS locations plus any user-added folders.
-    auto searchPaths = vst3Format->getDefaultLocationsToSearch();
-    for (const auto& path : getUserScanPaths())
-        searchPaths.addIfNotAlreadyThere (juce::File (path));
+    const auto userPaths = getUserScanPaths();
 
-    juce::PluginDirectoryScanner scanner (knownPlugins, *vst3Format,
-                                          searchPaths,
-                                          true, pedalFile, true);
-
-    juce::String currentName;
-
-    while (! threadShouldExit() && scanner.scanNextFile (true, currentName))
+    // Scan every plugin format the host was built for — VST3 everywhere, plus
+    // AudioUnit on macOS. addDefaultFormatsToManager only registers the formats
+    // enabled at compile time (JUCE_PLUGINHOST_VST3 / _AU), so iterating the
+    // manager's formats is already exactly the right set per platform.
+    for (auto* format : formatManager.getFormats())
     {
+        if (format == nullptr || threadShouldExit())
+            break;
+
+        // Default OS locations for this format, plus any user-added folders. The
+        // extra folders are only meaningful for file-based formats (VST3); the AU
+        // scanner enumerates registered components and simply ignores non-matches.
+        auto searchPaths = format->getDefaultLocationsToSearch();
+        for (const auto& path : userPaths)
+            searchPaths.addIfNotAlreadyThere (juce::File (path));
+
+        // allowAsync = true so AUv3 / plugins needing asynchronous instantiation
+        // are still catalogued; the dead-man's-pedal blacklists any that crash us.
+        juce::PluginDirectoryScanner scanner (knownPlugins, *format,
+                                              searchPaths,
+                                              true, pedalFile, true);
+
+        juce::String currentName;
+
+        while (! threadShouldExit() && scanner.scanNextFile (true, currentName))
         {
-            const juce::ScopedLock lock (progressLock);
-            progressText = currentName;
+            {
+                const juce::ScopedLock lock (progressLock);
+                progressText = currentName;
+            }
+            sendChangeMessage();
         }
-        sendChangeMessage();
     }
 
     {

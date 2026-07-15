@@ -30,6 +30,14 @@ namespace play::Colours
 namespace play
 {
 
+/** Human-readable name of the plugin formats this build hosts, for UI copy —
+    "VST3 and Audio Unit" on macOS (which also scans AU), "VST3" elsewhere. */
+#if JUCE_MAC
+ inline const juce::String pluginFormatsLabel { "VST3 and Audio Unit" };
+#else
+ inline const juce::String pluginFormatsLabel { "VST3" };
+#endif
+
 /** Asks DWM to draw the native title bar dark so it matches the theme.
     Call after the window is visible (its peer must exist). No-op off Windows. */
 void applyDarkTitleBar (juce::Component& window);

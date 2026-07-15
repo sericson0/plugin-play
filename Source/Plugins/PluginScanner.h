@@ -7,10 +7,14 @@ namespace play
 
 //==============================================================================
 /**
-    Maintains the list of installed VST3 plugins.
+    Maintains the list of installed plugins — VST3 on every platform, plus
+    Audio Unit on macOS (whichever formats the build hosts).
 
-    Scanning runs on a background thread over the standard VST3 directories.
-    A dead-man's-pedal file blacklists any plugin that crashed a previous scan.
+    Scanning runs on a background thread over each format's standard directories.
+    Each candidate file is examined in a separate worker process (see
+    OutOfProcessScanner), so a plugin that crashes or hangs while being
+    catalogued is blacklisted instead of taking the app down. A dead-man's-pedal
+    file remains as a backstop against the app process itself dying mid-scan.
     The list is persisted in the app's properties file.
 
     Broadcasts a change message when scanning finishes (and as entries appear).

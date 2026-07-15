@@ -510,7 +510,10 @@ void LoopbackCapture::captureThreadEntry()
 
 namespace play
 {
+   #if ! JUCE_MAC
+    // macOS has a real implementation (process-object walk) in ProcessTap.mm.
     std::vector<AudioSource> enumerateAudioSources() { return {}; }
+   #endif
 
     LoopbackCapture::LoopbackCapture() = default;
     LoopbackCapture::~LoopbackCapture() = default;
