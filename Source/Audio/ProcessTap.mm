@@ -210,8 +210,10 @@ struct ProcessTapCapture::Impl : private juce::Timer
         scratch.clear();
         scratchFill = 0;
         zeroFrames.store (0);
+        lastCallbackMs.store (juce::Time::getMillisecondCounter());
         resamplerNeedsReset.store (true);
         rebuildAfterSeconds = 15.0;
+        stallAfterSeconds   = 5.0;
 
         if (! createAggregateAndStart())
         {
@@ -374,6 +376,11 @@ struct ProcessTapCapture::Impl : private juce::Timer
                             void* clientData)
     {
         auto& self = *static_cast<Impl*> (clientData);
+
+        // Liveness stamp for the watchdog: a stalled aggregate stops calling this
+        // proc entirely, which the zero-frame counter alone can never notice.
+        self.lastCallbackMs.store (juce::Time::getMillisecondCounter(),
+                                   std::memory_order_relaxed);
 
         if (outOutputData != nullptr)
             for (UInt32 i = 0; i < outOutputData->mNumberBuffers; ++i)
@@ -564,15 +571,36 @@ struct ProcessTapCapture::Impl : private juce::Timer
     }
 
     //==========================================================================
-    // Silence watchdog (message thread): long-running taps have been reported to
-    // decay into permanent zeros. After `rebuildAfterSeconds` of EXACT silence,
-    // tear down and recreate the tap. Backoff doubles the threshold (a paused
-    // source also reads as silence — a rebuild then is harmless but pointless,
-    // so don't storm); real samples reset the streak (IOProc) and the backoff.
+    // Watchdog (message thread), covering the two ways a tap dies in the wild:
+    //
+    //  • STALL — the aggregate stops calling the IOProc altogether. Its clock-
+    //    master subdevice is the default output captured at tap-start time, so
+    //    unplugging that device (headphones, an interface) kills the callbacks.
+    //    Zero frames then never accrue, so only a liveness stamp can catch it.
+    //    Rebuilding re-resolves the CURRENT default output, following the move.
+    //
+    //  • SILENCE — long-running taps have been reported to decay into permanent
+    //    exact zeros while the IOProc keeps firing. After `rebuildAfterSeconds`
+    //    of EXACT silence, tear down and recreate the tap. Backoff doubles the
+    //    threshold (a paused source also reads as silence — a rebuild then is
+    //    harmless but pointless, so don't storm); real samples reset the streak
+    //    (in the IOProc) and both backoffs.
     void timerCallback() override
     {
         if (! active.load())
             return;
+
+        // Unsigned subtraction is wraparound-safe.
+        const auto sinceCallbackSeconds =
+            (double) (juce::Time::getMillisecondCounter()
+                        - lastCallbackMs.load (std::memory_order_relaxed)) / 1000.0;
+
+        if (sinceCallbackSeconds >= stallAfterSeconds)
+        {
+            rebuild ("IOProc stalled");
+            stallAfterSeconds = juce::jmin (stallAfterSeconds * 2.0, 60.0);
+            return;
+        }
 
         const auto zeroSeconds = (double) zeroFrames.load (std::memory_order_relaxed)
                                     / juce::jmax (1.0, tapRate);
@@ -580,19 +608,28 @@ struct ProcessTapCapture::Impl : private juce::Timer
         if (zeroSeconds <= 0.0)
         {
             rebuildAfterSeconds = 15.0;   // signal is flowing again
+            stallAfterSeconds   = 5.0;
             return;
         }
 
         if (zeroSeconds < rebuildAfterSeconds)
             return;
 
-        DBG ("ProcessTap: " << zeroSeconds << "s of silence - rebuilding tap");
+        rebuild ("sustained exact silence");
+        rebuildAfterSeconds = juce::jmin (rebuildAfterSeconds * 2.0, 240.0);
+    }
+
+    void rebuild (const char* why)
+    {
+        DBG ("ProcessTap: rebuilding tap (" << why << ")");
+        juce::ignoreUnused (why);
+
         destroyCoreAudioObjects();
         const bool ok = createTap() && createAggregateAndStart();
 
         zeroFrames.store (0, std::memory_order_relaxed);
+        lastCallbackMs.store (juce::Time::getMillisecondCounter(), std::memory_order_relaxed);
         resamplerNeedsReset.store (true, std::memory_order_release);
-        rebuildAfterSeconds = juce::jmin (rebuildAfterSeconds * 2.0, 240.0);
 
         if (! ok)
         {
@@ -617,8 +654,10 @@ struct ProcessTapCapture::Impl : private juce::Timer
     std::atomic<bool>   active { false };
     std::atomic<double> ratio { 1.0 };
     std::atomic<juce::int64> zeroFrames { 0 };
+    std::atomic<juce::uint32> lastCallbackMs { 0 };   // watchdog liveness stamp
     std::atomic<bool> resamplerNeedsReset { false };
     double rebuildAfterSeconds = 15.0;
+    double stallAfterSeconds   = 5.0;
 
     // Resampler state (audio thread only).
     static constexpr int resampleChunk   = 512;
