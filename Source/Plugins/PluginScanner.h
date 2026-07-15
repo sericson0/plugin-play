@@ -11,7 +11,10 @@ namespace play
     Audio Unit on macOS (whichever formats the build hosts).
 
     Scanning runs on a background thread over each format's standard directories.
-    A dead-man's-pedal file blacklists any plugin that crashed a previous scan.
+    Each candidate file is examined in a separate worker process (see
+    OutOfProcessScanner), so a plugin that crashes or hangs while being
+    catalogued is blacklisted instead of taking the app down. A dead-man's-pedal
+    file remains as a backstop against the app process itself dying mid-scan.
     The list is persisted in the app's properties file.
 
     Broadcasts a change message when scanning finishes (and as entries appear).

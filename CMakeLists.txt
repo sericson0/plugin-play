@@ -84,6 +84,7 @@ target_sources(PluginPlay
         Source/Audio/AppRouting.cpp
         Source/Audio/LoopbackCapture.cpp
         Source/Audio/WasapiEndpoints.cpp
+        Source/Plugins/OutOfProcessScanner.cpp
         Source/Plugins/PluginScanner.cpp
         Source/Setup/UpdateCheck.cpp
         Source/Setup/VirtualCable.cpp

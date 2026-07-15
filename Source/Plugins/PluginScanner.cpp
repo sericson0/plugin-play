@@ -1,4 +1,5 @@
 #include "PluginScanner.h"
+#include "OutOfProcessScanner.h"
 
 namespace play
 {
@@ -16,6 +17,11 @@ PluginScanner::PluginScanner (juce::AudioPluginFormatManager& fm, juce::Properti
       formatManager (fm),
       properties (props)
 {
+    // Examine each candidate plugin in a worker process, so a plugin that crashes
+    // or hangs while being catalogued can't take the app down with it (the first
+    // launch runs a full automatic scan). See OutOfProcessScanner.
+    knownPlugins.setCustomScanner (std::make_unique<OutOfProcessScanner>());
+
     if (auto savedList = properties.getXmlValue ("knownPlugins"))
         knownPlugins.recreateFromXml (*savedList);
 
