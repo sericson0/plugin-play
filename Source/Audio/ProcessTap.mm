@@ -191,19 +191,21 @@ struct ProcessTapCapture::Impl : private juce::Timer
         engineRate = engineSampleRate;
 
         // The tap must exist first: its stream format dictates the incoming rate,
-        // which sizes the ring. Only then may the IOProc start writing.
+        // which sets the resampler ratio. Only then may the IOProc start writing.
         if (! createTap())
         {
             pid.store (0);
             return false;
         }
 
-        // ~1 second of stereo headroom at the incoming (tap) rate: absorbs drift
-        // and scheduling jitter between the IOProc and the output callback.
-        const int ringFrames = juce::nextPowerOfTwo ((int) juce::jlimit (8000.0, 384000.0, tapRate));
-        ring.setSize (2, ringFrames, false, true, true);
+        // Fixed maximum size so a re-start or a watchdog rebuild NEVER reallocates
+        // the ring or FIFO under a concurrent audio-thread read() (setSize with
+        // avoidReallocating is a no-op after the first allocation; the `active`
+        // flag alone can't guard a reallocation). Ample stereo headroom to absorb
+        // drift and scheduling jitter: ~10 s at 48 kHz, ~1.4 s at 384 kHz.
+        ring.setSize (2, maxRingFrames, false, true, true);
         ring.clear();
-        fifo.setTotalSize (ringFrames);
+        fifo.setTotalSize (maxRingFrames);
         fifo.reset();
 
         scratch.setSize (2, scratchCapacity, false, true, true);
@@ -235,6 +237,19 @@ struct ProcessTapCapture::Impl : private juce::Timer
         stopTimer();
         destroyCoreAudioObjects();
         pid.store (0);
+    }
+
+    // Message thread. Retune the resampler when the engine's output rate changes
+    // (device/rate switch). Deliberately NOT a restart: start() would tear down
+    // and recreate the Core Audio objects, REALLOCATE the ring/FIFO the audio
+    // thread is reading, and needlessly re-mute the tapped app. The tap keeps its
+    // own rate; the read() resampler already bridges tapRate -> engineRate, so a
+    // lock-free ratio update is all that is required.
+    void setEngineRate (double newRate) noexcept
+    {
+        engineRate = juce::jmax (1.0, newRate);
+        ratio.store (tapRate / engineRate, std::memory_order_relaxed);
+        resamplerNeedsReset.store (true, std::memory_order_release);
     }
 
     //==========================================================================
@@ -571,6 +586,28 @@ struct ProcessTapCapture::Impl : private juce::Timer
     }
 
     //==========================================================================
+    // Message thread. Is the tapped process currently producing output? This is
+    // what separates the tap-decay bug (source IS outputting, yet the tap reads
+    // exact zeros) from an ordinary pause (source stopped outputting — silence is
+    // expected). Only the former warrants a disruptive rebuild. On < 14.4 the
+    // process-object API is unavailable, but taps don't run there either.
+    bool sourceIsRunningOutput()
+    {
+        if (__builtin_available (macOS 14.4, *))
+        {
+            const auto processObject = processObjectForPid ((pid_t) pid.load());
+            if (processObject == kAudioObjectUnknown)
+                return false;
+
+            UInt32 runningOutput = 0;
+            getProperty (processObject, kAudioProcessPropertyIsRunningOutput, runningOutput);
+            return runningOutput != 0;
+        }
+
+        return true;
+    }
+
+    //==========================================================================
     // Watchdog (message thread), covering the two ways a tap dies in the wild:
     //
     //  • STALL — the aggregate stops calling the IOProc altogether. Its clock-
@@ -581,10 +618,11 @@ struct ProcessTapCapture::Impl : private juce::Timer
     //
     //  • SILENCE — long-running taps have been reported to decay into permanent
     //    exact zeros while the IOProc keeps firing. After `rebuildAfterSeconds`
-    //    of EXACT silence, tear down and recreate the tap. Backoff doubles the
-    //    threshold (a paused source also reads as silence — a rebuild then is
-    //    harmless but pointless, so don't storm); real samples reset the streak
-    //    (in the IOProc) and both backoffs.
+    //    of EXACT silence, tear down and recreate the tap — but only if the source
+    //    is still outputting (see sourceIsRunningOutput; a paused source reads as
+    //    silence too and must not trigger a teardown). Backoff doubles the
+    //    threshold so we never storm; real samples reset the streak (in the
+    //    IOProc) and both backoffs.
     void timerCallback() override
     {
         if (! active.load())
@@ -613,6 +651,14 @@ struct ProcessTapCapture::Impl : private juce::Timer
         }
 
         if (zeroSeconds < rebuildAfterSeconds)
+            return;
+
+        // A source that has stopped outputting (paused, between tracks, a quiet
+        // passage) reads as exact silence too. Rebuilding then would tear the tap
+        // down and briefly un-mute the app for nothing — and risks leaking dry
+        // audio if playback resumes mid-rebuild. Only rebuild when the source is
+        // actively outputting yet we still see silence: the genuine decay bug.
+        if (! sourceIsRunningOutput())
             return;
 
         rebuild ("sustained exact silence");
@@ -647,6 +693,11 @@ struct ProcessTapCapture::Impl : private juce::Timer
     AudioObjectID aggregate = kAudioObjectUnknown;
     AudioDeviceIOProcID ioProcID = nullptr;
     NSString* tapUID = nil;
+
+    // Sized once at the maximum so the ring/FIFO are never reallocated on a
+    // re-start or rebuild: 524288 >= nextPowerOfTwo(384000), the highest tap rate
+    // we accept. ~4 MB of stereo float — a one-time cost.
+    static constexpr int maxRingFrames = 1 << 19;
 
     juce::AbstractFifo fifo { 1 };
     juce::AudioBuffer<float> ring;   // deinterleaved stereo at the tap rate
@@ -690,6 +741,11 @@ bool ProcessTapCapture::start (juce::uint32 targetPid, double sampleRate)
 void ProcessTapCapture::stop()
 {
     impl->shutdown();
+}
+
+void ProcessTapCapture::setEngineRate (double sampleRate)
+{
+    impl->setEngineRate (juce::jlimit (8000.0, 384000.0, sampleRate));
 }
 
 bool ProcessTapCapture::isActive() const noexcept

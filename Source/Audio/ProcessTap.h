@@ -61,6 +61,11 @@ public:
     /** Destroys the tap and aggregate device (un-muting the tapped app). */
     void stop();
 
+    /** Retunes the internal resampler to a new engine output sample rate without
+        rebuilding the tap. Call on a device/rate change while capturing; cheaper
+        and glitch-free versus stop()+start() (no re-mute, no buffer realloc). */
+    void setEngineRate (double sampleRate);
+
     bool isActive() const noexcept;
     juce::uint32 targetPid() const noexcept;
 

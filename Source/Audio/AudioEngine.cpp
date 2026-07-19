@@ -808,19 +808,24 @@ void AudioEngine::changeListenerCallback (juce::ChangeBroadcaster*)
     // so re-add the connections, and persist the new device setup.
     rebuildConnections();
 
-    // If we're capturing and the output device's rate changed, re-open the capture
-    // at the new rate so the FIFO stays 1:1 (no per-block resampling on our side).
-    // Skip a restart for a buffer-size-only change — it would needlessly bounce the
-    // endpoint mute.
+   #if JUCE_MAC
+    // If we're capturing and the output device's rate changed, retune the tap's
+    // resampler to the new engine rate. We deliberately do NOT restart the tap:
+    // start() would tear down/recreate the Core Audio objects and reallocate the
+    // ring/FIFO the audio thread is reading (a data race), and would needlessly
+    // re-mute the tapped app. The resampler already bridges tapRate != engineRate,
+    // so a lock-free ratio update is all that is needed. (Capture is the live
+    // input path only on macOS; on Windows the redirect model is used instead.)
     if (useCaptureInput && capture.isActive())
     {
         const auto rate = currentSampleRate();
         if (std::abs (rate - captureStartedRate) > 1.0)
         {
-            capture.start (capture.targetPid(), rate);   // start() stops first; re-mutes
+            capture.setEngineRate (rate);
             captureStartedRate = rate;
         }
     }
+   #endif
 
     scheduleSave();
     sendChangeMessage();
